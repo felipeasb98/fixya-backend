@@ -57,4 +57,9 @@ app.use(errorHandler);
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`\nFixYa
+  console.log(`FixYa Backend corriendo en puerto ${PORT}`);
+  console.log(`Entorno: ${process.env.NODE_ENV}`);
+  console.log(`Health: http://localhost:${PORT}/health`);
+});
+
+module.exports = { app, server, io };
