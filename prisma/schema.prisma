@@ -7,91 +7,71 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// ─────────────────────────────────────────────
-// USUARIOS (clientes)
-// ─────────────────────────────────────────────
 model Usuario {
-  id               String        @id @default(uuid())
+  id               String      @id @default(uuid())
   nombre           String
-  email            String        @unique
+  email            String      @unique
   telefono         String
   passwordHash     String
   avatarUrl        String?
-  rut              String?       @unique
-  emailVerificado  Boolean       @default(false)
-  telefonoVerif    Boolean       @default(false)
-  fcmToken         String?       // Push notifications
-  createdAt        DateTime      @default(now())
-  updatedAt        DateTime      @updatedAt
+  rut              String?     @unique
+  emailVerificado  Boolean     @default(false)
+  telefonoVerif    Boolean     @default(false)
+  fcmToken         String?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
 
-  solicitudes      Solicitud[]
-  ratingsDados     Rating[]      @relation("RatingCliente")
-  
+  solicitudes  Solicitud[]
+  ratingsDados Rating[]    @relation("RatingCliente")
+
   @@map("usuarios")
 }
 
-// ─────────────────────────────────────────────
-// TÉCNICOS
-// ─────────────────────────────────────────────
 model Tecnico {
-  id               String        @id @default(uuid())
-  nombre           String
-  email            String        @unique
-  telefono         String
-  passwordHash     String
-  avatarUrl        String?
-  rut              String        @unique
-  descripcion      String?
+  id                  String    @id @default(uuid())
+  nombre              String
+  email               String    @unique
+  telefono            String
+  passwordHash        String
+  avatarUrl           String?
+  rut                 String    @unique
+  descripcion         String?
+  banco               String?
+  tipoCuenta          String?
+  numeroCuenta        String?
+  emailBanco          String?
+  secCertificado      Boolean   @default(false)
+  secDocUrl           String?
+  secVencimiento      DateTime?
+  secVerificado       Boolean   @default(false)
+  activo              Boolean   @default(false)
+  disponible          Boolean   @default(false)
+  comisionPct         Float     @default(18.0)
+  plan                String    @default("normal")
+  ratingPromedio      Float     @default(0)
+  totalRatings        Int       @default(0)
+  trabajosCompletados Int       @default(0)
+  latitud             Float?
+  longitud            Float?
+  ubicacionAt         DateTime?
+  fcmToken            String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
-  // Cuenta bancaria para transferencias
-  banco            String?
-  tipoCuenta       String?       // "cuenta_corriente" | "cuenta_vista" | "cuenta_rut"
-  numeroCuenta     String?
-  emailBanco       String?
-
-  // Certificación SEC
-  secCertificado   Boolean       @default(false)
-  secDocUrl        String?
-  secVencimiento   DateTime?
-  secVerificado    Boolean       @default(false)
-
-  // Estado y comisión
-  activo           Boolean       @default(false)   // activado por admin tras verificación
-  disponible       Boolean       @default(false)   // el técnico está online y listo
-  comisionPct      Float         @default(18.0)    // 10% fundadores, 18% normal
-  plan             String        @default("normal") // "fundador" | "normal"
-
-  // Rating acumulado
-  ratingPromedio   Float         @default(0)
-  totalRatings     Int           @default(0)
-  trabajosCompletados Int        @default(0)
-
-  // GPS (última posición conocida)
-  latitud          Float?
-  longitud         Float?
-  ubicacionAt      DateTime?
-
-  fcmToken         String?
-  createdAt        DateTime      @default(now())
-  updatedAt        DateTime      @updatedAt
-
-  rubros           TecnicoRubro[]
-  postulaciones    Postulacion[]
-  trabajos         Solicitud[]   @relation("TecnicoAsignado")
-  ratings          Rating[]      @relation("RatingAlTecnico")
-  pagos            Pago[]
+  rubros        TecnicoRubro[]
+  postulaciones Postulacion[]
+  trabajos      Solicitud[]    @relation("TecnicoAsignado")
+  ratings       Rating[]       @relation("RatingAlTecnico")
+  pagos         Pago[]
 
   @@map("tecnicos")
 }
 
-// ─────────────────────────────────────────────
-// RUBROS disponibles en la plataforma
-// ─────────────────────────────────────────────
 model Rubro {
-  id      String  @id @default(uuid())
-  nombre  String  @unique  // "gasfiteria" | "electricidad" | "cerrajeria" | "handyman"
-  emoji   String
-  activo  Boolean @default(true)
+  id     String  @id @default(uuid())
+  nombre String  @unique
+  emoji  String
+  activo Boolean @default(true)
 
   tecnicos    TecnicoRubro[]
   solicitudes Solicitud[]
@@ -109,186 +89,136 @@ model TecnicoRubro {
   @@map("tecnico_rubros")
 }
 
-// ─────────────────────────────────────────────
-// SOLICITUDES (corazón del sistema)
-// ─────────────────────────────────────────────
 model Solicitud {
-  id             String          @id @default(uuid())
-  codigo         String          @unique   // "FY-3001"
-  
-  // Relaciones
-  usuarioId      String
-  usuario        Usuario         @relation(fields: [usuarioId], references: [id])
-  rubroId        String
-  rubro          Rubro           @relation(fields: [rubroId], references: [id])
-  tecnicoId      String?
-  tecnico        Tecnico?        @relation("TecnicoAsignado", fields: [tecnicoId], references: [id])
+  id                    String          @id @default(uuid())
+  codigo                String          @unique
+  usuarioId             String
+  usuario               Usuario         @relation(fields: [usuarioId], references: [id])
+  rubroId               String
+  rubro                 Rubro           @relation(fields: [rubroId], references: [id])
+  tecnicoId             String?
+  tecnico               Tecnico?        @relation("TecnicoAsignado", fields: [tecnicoId], references: [id])
+  trabajo               String
+  descripcion           String?
+  urgencia              String          @default("normal")
+  moBase                Float
+  matEstimado           Float           @default(0)
+  totalEstimado         Float
+  totalFinal            Float?
+  latitud               Float?
+  longitud              Float?
+  direccion             String?
+  comuna                String?
+  fotosProblema         String[]
+  fotosTrabajo          String[]
+  fotosCierre           String[]
+  agendado              Boolean         @default(false)
+  fechaAgendada         DateTime?
+  bloqueHorario         String?
+  estado                EstadoSolicitud @default(PENDIENTE)
+  tecnicoAceptoAt       DateTime?
+  tecnicoEnCaminoAt     DateTime?
+  trabajoInicioAt       DateTime?
+  trabajoFinAt          DateTime?
+  clienteConfirmoAt     DateTime?
+  canceladoAt           DateTime?
+  motivoCancelacion     String?
+  materialesConfirmados Boolean         @default(false)
+  reporteFaltante       String?
+  moModificada          Float?
+  motivoModTarifa       String?
+  modTarifaEstado       String?
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
 
-  // Detalle del trabajo
-  trabajo        String          // Nombre del trabajo ej: "Cambio de llave de paso"
-  descripcion    String?
-  urgencia       String          @default("normal") // "normal" | "urgente" | "emergencia"
-  
-  // Presupuesto
-  moBase         Float           // Mano de obra base
-  matEstimado    Float           @default(0)
-  totalEstimado  Float
-  totalFinal     Float?          // Puede cambiar si hay modificación de tarifa
-  
-  // GPS del problema
-  latitud        Float?
-  longitud       Float?
-  direccion      String?
-  comuna         String?
-
-  // Fotos
-  fotosProblema  String[]        // URLs
-  fotosTrabajo   String[]        // Fotos del trabajo en progreso
-  fotosCierre    String[]        // Fotos del trabajo terminado
-
-  // Agendamiento
-  agendado       Boolean         @default(false)
-  fechaAgendada  DateTime?
-  bloqueHorario  String?         // "manana" | "tarde" | "noche"
-
-  // Estado del flujo
-  estado         EstadoSolicitud @default(PENDIENTE)
-  
-  // Timestamps del flujo
-  tecnicoAceptoAt    DateTime?
-  tecnicoEnCaminoAt  DateTime?
-  trabajoInicioAt    DateTime?
-  trabajoFinAt       DateTime?
-  clienteConfirmoAt  DateTime?
-  canceladoAt        DateTime?
-  motivoCancelacion  String?
-
-  // Materiales
-  materialesConfirmados Boolean  @default(false)
-  reporteFaltante  String?
-
-  // Modificación de tarifa
-  moModificada     Float?
-  motivoModTarifa  String?
-  modTarifaEstado  String?       // "pendiente" | "aceptada" | "rechazada"
-
-  createdAt      DateTime        @default(now())
-  updatedAt      DateTime        @updatedAt
-
-  postulaciones  Postulacion[]
-  pago           Pago?
-  rating         Rating?
+  postulaciones Postulacion[]
+  pago          Pago?
+  rating        Rating?
 
   @@map("solicitudes")
 }
 
 enum EstadoSolicitud {
-  PENDIENTE       // Esperando técnicos
-  CON_POSTULANTES // Hay técnicos postulados
-  CONFIRMADO      // Cliente eligió técnico
-  EN_CAMINO       // Técnico en camino
-  EN_TRABAJO      // Técnico trabajando
-  ESPERANDO_CONF  // Técnico marcó listo, esperando confirmación cliente
-  COMPLETADO      // Trabajo confirmado y pagado
+  PENDIENTE
+  CON_POSTULANTES
+  CONFIRMADO
+  EN_CAMINO
+  EN_TRABAJO
+  ESPERANDO_CONF
+  COMPLETADO
   CANCELADO
   DISPUTADO
 }
 
-// ─────────────────────────────────────────────
-// POSTULACIONES de técnicos a solicitudes
-// ─────────────────────────────────────────────
 model Postulacion {
-  id          String   @id @default(uuid())
+  id          String    @id @default(uuid())
   solicitudId String
   solicitud   Solicitud @relation(fields: [solicitudId], references: [id], onDelete: Cascade)
   tecnicoId   String
-  tecnico     Tecnico  @relation(fields: [tecnicoId], references: [id])
-  
+  tecnico     Tecnico   @relation(fields: [tecnicoId], references: [id])
   mensaje     String?
-  tiempoEta   Int?     // minutos estimados de llegada
-  estado      String   @default("pendiente") // "pendiente" | "aceptada" | "rechazada"
-  
-  createdAt   DateTime @default(now())
+  tiempoEta   Int?
+  estado      String    @default("pendiente")
+  createdAt   DateTime  @default(now())
 
   @@unique([solicitudId, tecnicoId])
   @@map("postulaciones")
 }
 
-// ─────────────────────────────────────────────
-// PAGOS
-// ─────────────────────────────────────────────
 model Pago {
-  id              String      @id @default(uuid())
-  solicitudId     String      @unique
-  solicitud       Solicitud   @relation(fields: [solicitudId], references: [id])
-  tecnicoId       String
-  tecnico         Tecnico     @relation(fields: [tecnicoId], references: [id])
-
-  monto           Float
-  comisionPct     Float
-  comisionMonto   Float
-  montoTecnico    Float       // monto - comision
-
-  metodo          String      // "khipu" | "webpay" | "transferencia"
-  estado          EstadoPago  @default(PENDIENTE)
-
-  // Datos del proveedor de pago
-  proveedorId     String?     // ID de la transacción en Khipu/Webpay
-  proveedorData   Json?       // Respuesta completa del proveedor
-
-  // Escrow
-  escrowAt        DateTime?   // Cuándo se retuvo el dinero
-  liberadoAt      DateTime?   // Cuándo se liberó al técnico
-
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
+  id            String     @id @default(uuid())
+  solicitudId   String     @unique
+  solicitud     Solicitud  @relation(fields: [solicitudId], references: [id])
+  tecnicoId     String
+  tecnico       Tecnico    @relation(fields: [tecnicoId], references: [id])
+  monto         Float
+  comisionPct   Float
+  comisionMonto Float
+  montoTecnico  Float
+  metodo        String
+  estado        EstadoPago @default(PENDIENTE)
+  proveedorId   String?
+  proveedorData Json?
+  escrowAt      DateTime?
+  liberadoAt    DateTime?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
 
   @@map("pagos")
 }
 
 enum EstadoPago {
   PENDIENTE
-  EN_ESCROW     // Dinero retenido, trabajo en curso
-  LIBERADO      // Transferido al técnico
-  REEMBOLSADO   // Devuelto al cliente
+  EN_ESCROW
+  LIBERADO
+  REEMBOLSADO
   DISPUTADO
 }
 
-// ─────────────────────────────────────────────
-// RATINGS mutuos
-// ─────────────────────────────────────────────
 model Rating {
-  id          String    @id @default(uuid())
-  solicitudId String    @unique
-  solicitud   Solicitud @relation(fields: [solicitudId], references: [id])
-
-  // Rating del cliente al técnico
-  estrellasTecnico  Int?      // 1-5
+  id                String    @id @default(uuid())
+  solicitudId       String    @unique
+  solicitud         Solicitud @relation(fields: [solicitudId], references: [id])
+  estrellasTecnico  Int?
   comentarioTecnico String?
   clienteId         String
   cliente           Usuario   @relation("RatingCliente", fields: [clienteId], references: [id])
-
-  // Rating del técnico al cliente
   estrellasCliente  Int?
   comentarioCliente String?
   tecnicoId         String
   tecnicoRef        Tecnico   @relation("RatingAlTecnico", fields: [tecnicoId], references: [id])
-
-  createdAt   DateTime @default(now())
+  createdAt         DateTime  @default(now())
 
   @@map("ratings")
 }
 
-// ─────────────────────────────────────────────
-// NOTIFICACIONES
-// ─────────────────────────────────────────────
 model Notificacion {
   id          String   @id @default(uuid())
-  destinoId   String   // usuarioId o tecnicoId
-  destinoTipo String   // "usuario" | "tecnico"
+  destinoId   String
+  destinoTipo String
   titulo      String
   cuerpo      String
-  tipo        String   // "nueva_solicitud" | "tecnico_en_camino" | "trabajo_completado" etc
+  tipo        String
   leida       Boolean  @default(false)
   data        Json?
   createdAt   DateTime @default(now())
