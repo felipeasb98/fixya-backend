@@ -1,187 +1,134 @@
 const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
-const { v4: uuidv4 } = require('uuid');
-const { query } = require('../config/db');
+const { validationResult } = require('express-validator');
+const { PrismaClient } = require('@prisma/client');
+const { generateTokens, verifyRefreshToken } = require('../utils/jwt');
+const { validarRut } = require('../utils/rut');
+const { AppError } = require('../utils/AppError');
 
-// Generar tokens JWT
-const generarTokens = (userId) => {
-  const accessToken = jwt.sign(
-    { id: userId },
-    process.env.JWT_SECRET,
-    { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
-  );
-  const refreshToken = jwt.sign(
-    { id: userId },
-    process.env.JWT_REFRESH_SECRET,
-    { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '30d' }
-  );
-  return { accessToken, refreshToken };
-};
+const prisma = new PrismaClient();
 
-// POST /auth/registro/cliente
-const registroCliente = async (req, res) => {
-  const { nombre, email, telefono, password } = req.body;
+exports.registroUsuario = async (req, res, next) => {
   try {
-    // Verificar si el email ya existe
-    const existe = await query('SELECT id FROM usuarios WHERE email = $1', [email.toLowerCase()]);
-    if (existe.rows.length > 0) {
-      return res.status(409).json({ error: 'El email ya está registrado' });
-    }
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(422).json({ errors: errors.array() });
+
+    const { nombre, email, password, telefono, rut } = req.body;
+    const existe = await prisma.usuario.findUnique({ where: { email } });
+    if (existe) throw new AppError('Este email ya esta registrado', 409);
+    if (rut && !validarRut(rut)) throw new AppError('RUT invalido', 422);
 
     const passwordHash = await bcrypt.hash(password, 12);
-    const id = uuidv4();
-
-    await query(
-      `INSERT INTO usuarios (id, nombre, email, telefono, password_hash, rol, activo)
-       VALUES ($1, $2, $3, $4, $5, 'cliente', true)`,
-      [id, nombre.trim(), email.toLowerCase(), telefono, passwordHash]
-    );
-
-    const { accessToken, refreshToken } = generarTokens(id);
-
-    res.status(201).json({
-      mensaje: 'Cuenta creada exitosamente',
-      accessToken,
-      refreshToken,
-      usuario: { id, nombre, email, rol: 'cliente' }
+    const usuario = await prisma.usuario.create({
+      data: { nombre, email, telefono, passwordHash, rut: rut || null },
+      select: { id: true, nombre: true, email: true, telefono: true, createdAt: true },
     });
-  } catch (err) {
-    console.error('Error registro cliente:', err);
-    res.status(500).json({ error: 'Error interno del servidor' });
-  }
+
+    const tokens = generateTokens({ id: usuario.id, rol: 'usuario' });
+    res.status(201).json({ message: 'Cuenta creada', usuario, ...tokens });
+  } catch (err) { next(err); }
 };
 
-// POST /auth/registro/tecnico
-const registroTecnico = async (req, res) => {
-  const {
-    nombre, email, telefono, password,
-    rubros, rut, banco, tipoCuenta, numeroCuenta
-  } = req.body;
+exports.registroTecnico = async (req, res, next) => {
   try {
-    const existe = await query('SELECT id FROM usuarios WHERE email = $1', [email.toLowerCase()]);
-    if (existe.rows.length > 0) {
-      return res.status(409).json({ error: 'El email ya está registrado' });
-    }
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(422).json({ errors: errors.array() });
+
+    const { nombre, email, password, telefono, rut, rubros, banco, tipoCuenta, numeroCuenta, emailBanco, descripcion } = req.body;
+
+    const existeEmail = await prisma.tecnico.findUnique({ where: { email } });
+    if (existeEmail) throw new AppError('Este email ya esta registrado', 409);
+    const existeRut = await prisma.tecnico.findUnique({ where: { rut } });
+    if (existeRut) throw new AppError('Este RUT ya esta registrado', 409);
+    if (!validarRut(rut)) throw new AppError('RUT invalido', 422);
+
+    const rubrosDB = await prisma.rubro.findMany({ where: { nombre: { in: rubros }, activo: true } });
+    if (rubrosDB.length !== rubros.length) throw new AppError('Uno o mas rubros no son validos', 422);
 
     const passwordHash = await bcrypt.hash(password, 12);
-    const id = uuidv4();
-
-    // Insertar usuario base
-    await query(
-      `INSERT INTO usuarios (id, nombre, email, telefono, password_hash, rol, activo)
-       VALUES ($1, $2, $3, $4, $5, 'tecnico', true)`,
-      [id, nombre.trim(), email.toLowerCase(), telefono, passwordHash]
-    );
-
-    // Insertar perfil técnico
-    await query(
-      `INSERT INTO tecnicos (id, usuario_id, rut, rubros, banco, tipo_cuenta, numero_cuenta,
-        estado_cuenta, comision, rating_promedio, trabajos_completados)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'pendiente_verificacion', $8, 5.0, 0)`,
-      [uuidv4(), id, rut, JSON.stringify(rubros), banco, tipoCuenta, numeroCuenta,
-       parseFloat(process.env.COMISION_FUNDADOR || '0.10')]
-    );
-
-    const { accessToken, refreshToken } = generarTokens(id);
-
-    res.status(201).json({
-      mensaje: 'Solicitud enviada. FixYa verificará tu cuenta en 24–48 hrs.',
-      accessToken,
-      refreshToken,
-      usuario: { id, nombre, email, rol: 'tecnico' }
+    const tecnico = await prisma.tecnico.create({
+      data: {
+        nombre, email, telefono, passwordHash, rut,
+        banco, tipoCuenta, numeroCuenta, emailBanco, descripcion,
+        activo: false,
+        rubros: { create: rubrosDB.map(r => ({ rubroId: r.id })) },
+      },
+      select: { id: true, nombre: true, email: true, activo: true, createdAt: true },
     });
-  } catch (err) {
-    console.error('Error registro técnico:', err);
-    res.status(500).json({ error: 'Error interno del servidor' });
-  }
+
+    res.status(201).json({ message: 'Solicitud enviada. FixYa verificara tus datos en 24-48 horas.', tecnico });
+  } catch (err) { next(err); }
 };
 
-// POST /auth/login
-const login = async (req, res) => {
-  const { email, password } = req.body;
+exports.login = async (req, res, next) => {
   try {
-    const result = await query(
-      `SELECT u.id, u.nombre, u.email, u.password_hash, u.rol, u.activo,
-              u.foto_url, u.telefono
-       FROM usuarios u
-       WHERE u.email = $1`,
-      [email.toLowerCase()]
-    );
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(422).json({ errors: errors.array() });
 
-    if (result.rows.length === 0) {
-      return res.status(401).json({ error: 'Credenciales incorrectas' });
+    const { email, password, rol, fcmToken } = req.body;
+    let entidad;
+
+    if (rol === 'usuario') {
+      entidad = await prisma.usuario.findUnique({ where: { email } });
+    } else {
+      entidad = await prisma.tecnico.findUnique({ where: { email } });
+      if (entidad && !entidad.activo) throw new AppError('Tu cuenta esta pendiente de verificacion.', 403);
     }
 
-    const usuario = result.rows[0];
+    if (!entidad) throw new AppError('Credenciales incorrectas', 401);
+    const passwordOk = await bcrypt.compare(password, entidad.passwordHash);
+    if (!passwordOk) throw new AppError('Credenciales incorrectas', 401);
 
-    if (!usuario.activo) {
-      return res.status(403).json({ error: 'Cuenta suspendida. Contacta a soporte.' });
+    if (fcmToken) {
+      const model = rol === 'usuario' ? prisma.usuario : prisma.tecnico;
+      await model.update({ where: { id: entidad.id }, data: { fcmToken } });
     }
 
-    const passwordOk = await bcrypt.compare(password, usuario.password_hash);
-    if (!passwordOk) {
-      return res.status(401).json({ error: 'Credenciales incorrectas' });
-    }
-
-    // Si es técnico, traer datos adicionales
-    let perfilTecnico = null;
-    if (usuario.rol === 'tecnico') {
-      const tecResult = await query(
-        `SELECT rubros, estado_cuenta, comision, rating_promedio,
-                trabajos_completados, es_fundador, sec_verificado
-         FROM tecnicos WHERE usuario_id = $1`,
-        [usuario.id]
-      );
-      if (tecResult.rows.length > 0) perfilTecnico = tecResult.rows[0];
-    }
-
-    const { accessToken, refreshToken } = generarTokens(usuario.id);
-
-    // Actualizar último acceso
-    await query('UPDATE usuarios SET ultimo_acceso = NOW() WHERE id = $1', [usuario.id]);
-
-    res.json({
-      accessToken,
-      refreshToken,
-      usuario: {
-        id: usuario.id,
-        nombre: usuario.nombre,
-        email: usuario.email,
-        rol: usuario.rol,
-        telefono: usuario.telefono,
-        fotoUrl: usuario.foto_url,
-        ...(perfilTecnico && { tecnico: perfilTecnico })
-      }
-    });
-  } catch (err) {
-    console.error('Error login:', err);
-    res.status(500).json({ error: 'Error interno del servidor' });
-  }
+    const tokens = generateTokens({ id: entidad.id, rol });
+    const { passwordHash, ...perfil } = entidad;
+    res.json({ message: 'Login exitoso', rol, perfil, ...tokens });
+  } catch (err) { next(err); }
 };
 
-// POST /auth/refresh
-const refreshToken = async (req, res) => {
-  const { refreshToken: token } = req.body;
-  if (!token) return res.status(400).json({ error: 'Refresh token requerido' });
-
+exports.refresh = async (req, res, next) => {
   try {
-    const decoded = jwt.verify(token, process.env.JWT_REFRESH_SECRET);
-    const result = await query('SELECT id, activo FROM usuarios WHERE id = $1', [decoded.id]);
-
-    if (result.rows.length === 0 || !result.rows[0].activo) {
-      return res.status(401).json({ error: 'Usuario no válido' });
-    }
-
-    const tokens = generarTokens(decoded.id);
+    const { refreshToken } = req.body;
+    if (!refreshToken) throw new AppError('Refresh token requerido', 400);
+    const payload = verifyRefreshToken(refreshToken);
+    const tokens = generateTokens({ id: payload.id, rol: payload.rol });
     res.json(tokens);
-  } catch (err) {
-    res.status(401).json({ error: 'Refresh token inválido o expirado' });
-  }
+  } catch (err) { next(new AppError('Refresh token invalido o expirado', 401)); }
 };
 
-// GET /auth/me
-const perfil = async (req, res) => {
-  res.json({ usuario: req.user });
+exports.logout = async (req, res, next) => {
+  try {
+    const model = req.user.rol === 'usuario' ? prisma.usuario : prisma.tecnico;
+    await model.update({ where: { id: req.user.id }, data: { fcmToken: null } });
+    res.json({ message: 'Sesion cerrada' });
+  } catch (err) { next(err); }
 };
 
-module.exports = { registroCliente, registroTecnico, login, refreshToken, perfil };
+exports.me = async (req, res, next) => {
+  try {
+    const { id, rol } = req.user;
+    let perfil;
+    if (rol === 'usuario') {
+      perfil = await prisma.usuario.findUnique({
+        where: { id },
+        select: { id: true, nombre: true, email: true, telefono: true, avatarUrl: true, emailVerificado: true, createdAt: true },
+      });
+    } else {
+      perfil = await prisma.tecnico.findUnique({
+        where: { id },
+        select: {
+          id: true, nombre: true, email: true, telefono: true, avatarUrl: true,
+          activo: true, disponible: true, ratingPromedio: true, totalRatings: true,
+          trabajosCompletados: true, comisionPct: true, plan: true,
+          secCertificado: true, secVerificado: true,
+          rubros: { include: { rubro: true } }, createdAt: true,
+        },
+      });
+    }
+    if (!perfil) throw new AppError('Usuario no encontrado', 404);
+    res.json({ rol, perfil });
+  } catch (err) { next(err); }
+};

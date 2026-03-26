@@ -1,56 +1,39 @@
-const router = require('express').Router();
+const express = require('express');
+const router = express.Router();
 const { body } = require('express-validator');
-const { authLimiter } = require('../middleware/rateLimiter');
-const { validate } = require('../middleware/validate');
-const { authMiddleware } = require('../middleware/auth');
-const {
-  registroCliente, registroTecnico,
-  login, refreshToken, perfil
-} = require('../controllers/authController');
+const authController = require('../controllers/authController');
+const { authenticate } = require('../middlewares/authenticate');
 
-// Validaciones reutilizables
-const validarPassword = body('password')
-  .isLength({ min: 8 }).withMessage('La contraseña debe tener al menos 8 caracteres');
+const emailVal = body('email').isEmail().normalizeEmail().withMessage('Email invalido');
+const passVal = body('password').isLength({ min: 8 }).withMessage('Minimo 8 caracteres');
 
-const validarEmail = body('email')
-  .isEmail().withMessage('Email inválido')
-  .normalizeEmail();
+router.post('/registro/usuario', [
+  body('nombre').trim().notEmpty().withMessage('Nombre requerido'),
+  emailVal,
+  passVal,
+  body('telefono').trim().notEmpty().withMessage('Telefono requerido'),
+], authController.registroUsuario);
 
-const validarTelefono = body('telefono')
-  .matches(/^\+?56\s?9\s?\d{4}\s?\d{4}$/).withMessage('Teléfono chileno inválido (+56 9 XXXX XXXX)');
-
-// POST /auth/registro/cliente
-router.post('/registro/cliente', authLimiter, [
-  body('nombre').notEmpty().trim().withMessage('El nombre es requerido'),
-  validarEmail,
-  validarTelefono,
-  validarPassword,
-], validate, registroCliente);
-
-// POST /auth/registro/tecnico
-router.post('/registro/tecnico', authLimiter, [
-  body('nombre').notEmpty().trim().withMessage('El nombre es requerido'),
-  validarEmail,
-  validarTelefono,
-  validarPassword,
+router.post('/registro/tecnico', [
+  body('nombre').trim().notEmpty(),
+  emailVal,
+  passVal,
+  body('telefono').trim().notEmpty(),
+  body('rut').trim().notEmpty().withMessage('RUT requerido'),
   body('rubros').isArray({ min: 1 }).withMessage('Selecciona al menos un rubro'),
-  body('rut').notEmpty().withMessage('El RUT es requerido'),
-  body('banco').notEmpty().withMessage('El banco es requerido'),
-  body('numeroCuenta').notEmpty().withMessage('El número de cuenta es requerido'),
-], validate, registroTecnico);
+  body('banco').trim().notEmpty().withMessage('Banco requerido'),
+  body('numeroCuenta').trim().notEmpty().withMessage('Numero de cuenta requerido'),
+  body('tipoCuenta').trim().notEmpty(),
+], authController.registroTecnico);
 
-// POST /auth/login
-router.post('/login', authLimiter, [
-  validarEmail,
-  body('password').notEmpty().withMessage('La contraseña es requerida'),
-], validate, login);
+router.post('/login', [
+  emailVal,
+  body('password').notEmpty().withMessage('Contrasena requerida'),
+  body('rol').isIn(['usuario', 'tecnico']).withMessage('Rol invalido'),
+], authController.login);
 
-// POST /auth/refresh
-router.post('/refresh', [
-  body('refreshToken').notEmpty().withMessage('Refresh token requerido'),
-], validate, refreshToken);
-
-// GET /auth/me
-router.get('/me', authMiddleware, perfil);
+router.post('/refresh', authController.refresh);
+router.post('/logout', authenticate, authController.logout);
+router.get('/me', authenticate, authController.me);
 
 module.exports = router;

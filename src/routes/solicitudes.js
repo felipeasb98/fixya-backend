@@ -1,41 +1,41 @@
-const router = require('express').Router();
-const { body, query: qv } = require('express-validator');
-const { authMiddleware, soloCliente, soloTecnico } = require('../middleware/auth');
-const { validate } = require('../middleware/validate');
-const {
-  crearSolicitud, obtenerSolicitud,
-  listarSolicitudes, cambiarEstado,
-  solicitudesDisponibles
-} = require('../controllers/solicitudController');
+const express = require('express');
+const router = express.Router();
+const { body, query } = require('express-validator');
+const ctrl = require('../controllers/solicitudesController');
+const { authenticate } = require('../middlewares/authenticate');
+const { soloRol } = require('../middlewares/soloRol');
 
-const rubrosValidos = ['gasfiteria', 'electricidad', 'cerrajeria', 'handyman', 'pintura'];
+router.post('/', authenticate, soloRol('usuario'), [
+  body('trabajo').trim().notEmpty().withMessage('Tipo de trabajo requerido'),
+  body('rubroId').notEmpty().withMessage('Rubro requerido'),
+  body('moBase').isFloat({ min: 0 }),
+  body('totalEstimado').isFloat({ min: 0 }),
+], ctrl.crear);
 
-// POST /solicitudes — cliente crea solicitud
-router.post('/', authMiddleware, soloCliente, [
-  body('rubro').isIn(rubrosValidos).withMessage('Rubro no válido'),
-  body('trabajoNombre').notEmpty().withMessage('El nombre del trabajo es requerido'),
-  body('urgencia').isIn(['ahora', 'hoy', 'programar']).withMessage('Urgencia no válida'),
-  body('latitud').isFloat({ min: -90, max: 90 }).withMessage('Latitud inválida'),
-  body('longitud').isFloat({ min: -180, max: 180 }).withMessage('Longitud inválida'),
-  body('direccion').notEmpty().withMessage('La dirección es requerida'),
-], validate, crearSolicitud);
+router.get('/mis-solicitudes', authenticate, soloRol('usuario'), ctrl.misSolicitudes);
+router.get('/disponibles', authenticate, soloRol('tecnico'), ctrl.disponibles);
+router.get('/:id', authenticate, ctrl.obtener);
 
-// GET /solicitudes/disponibles — técnico ve trabajos cercanos
-router.get('/disponibles', authMiddleware, soloTecnico, [
-  qv('latitud').optional().isFloat(),
-  qv('longitud').optional().isFloat(),
-  qv('radio').optional().isFloat({ min: 1, max: 50 }),
-], validate, solicitudesDisponibles);
+router.post('/:id/elegir-tecnico', authenticate, soloRol('usuario'), [
+  body('tecnicoId').notEmpty(),
+], ctrl.elegirTecnico);
 
-// GET /solicitudes — historial
-router.get('/', authMiddleware, listarSolicitudes);
+router.patch('/:id/en-camino', authenticate, soloRol('tecnico'), ctrl.enCamino);
+router.patch('/:id/inicio-trabajo', authenticate, soloRol('tecnico'), ctrl.inicioTrabajo);
+router.patch('/:id/trabajo-terminado', authenticate, soloRol('tecnico'), ctrl.trabajoTerminado);
+router.patch('/:id/confirmar', authenticate, soloRol('usuario'), ctrl.confirmarTrabajo);
 
-// GET /solicitudes/:id
-router.get('/:id', authMiddleware, obtenerSolicitud);
+router.post('/:id/mod-tarifa', authenticate, soloRol('tecnico'), [
+  body('moModificada').isFloat({ min: 0 }),
+  body('motivoModTarifa').trim().notEmpty(),
+], ctrl.solicitarModTarifa);
 
-// PATCH /solicitudes/:id/estado
-router.patch('/:id/estado', authMiddleware, [
-  body('estado').isIn(['en_camino', 'en_trabajo', 'completado', 'cancelado']).withMessage('Estado no válido'),
-], validate, cambiarEstado);
+router.patch('/:id/resp-tarifa', authenticate, soloRol('usuario'), [
+  body('decision').isIn(['aceptar', 'rechazar']),
+], ctrl.responderModTarifa);
+
+router.patch('/:id/cancelar', authenticate, [
+  body('motivo').trim().notEmpty(),
+], ctrl.cancelar);
 
 module.exports = router;
