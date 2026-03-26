@@ -26,8 +26,7 @@ model Usuario {
 
   solicitudes      Solicitud[]
   ratingsDados     Rating[]      @relation("RatingCliente")
-  ratingsRecibidos Rating[]      @relation("RatingTecnico") // No aplica para cliente, pero lo dejamos
-
+  
   @@map("usuarios")
 }
 
