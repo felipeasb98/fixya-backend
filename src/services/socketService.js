@@ -1,119 +1,110 @@
-const { verifyAccessToken } = require('../utils/jwt');
+const { Server } = require('socket.io');
+const jwt = require('jsonwebtoken');
+const { query } = require('../config/db');
 
-const connectedUsers = new Map();
-const connectedTecnicos = new Map();
+let io;
 
-let _io;
+const initSocket = (httpServer) => {
+  io = new Server(httpServer, {
+    cors: {
+      origin: process.env.FRONTEND_URL || '*',
+      methods: ['GET', 'POST']
+    }
+  });
 
-function initSocket(io) {
-  _io = io;
-
-  io.use((socket, next) => {
-    const token = socket.handshake.auth?.token || socket.handshake.query?.token;
+  // Middleware: verificar JWT en cada conexión de socket
+  io.use(async (socket, next) => {
+    const token = socket.handshake.auth.token;
     if (!token) return next(new Error('Token requerido'));
+
     try {
-      const payload = verifyAccessToken(token);
-      socket.userId = payload.id;
-      socket.userRol = payload.rol;
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      const result = await query(
+        'SELECT id, rol FROM usuarios WHERE id = $1 AND activo = true',
+        [decoded.id]
+      );
+      if (result.rows.length === 0) return next(new Error('Usuario no válido'));
+
+      socket.userId = result.rows[0].id;
+      socket.userRol = result.rows[0].rol;
       next();
     } catch {
-      next(new Error('Token invalido'));
+      next(new Error('Token inválido'));
     }
   });
 
   io.on('connection', (socket) => {
-    const { userId, userRol } = socket;
-    console.log(`[Socket] Conectado: ${userRol} ${userId}`);
+    console.log(`🔌 Socket conectado: ${socket.userId} (${socket.userRol})`);
 
-    const map = userRol === 'tecnico' ? connectedTecnicos : connectedUsers;
-    if (!map.has(userId)) map.set(userId, new Set());
-    map.get(userId).add(socket.id);
+    // Unirse al canal personal del usuario
+    socket.join(`usuario:${socket.userId}`);
 
-    socket.join(`${userRol}:${userId}`);
+    // ─── Técnico: unirse a canales de rubros activos ───
+    socket.on('suscribir_rubros', async (rubros) => {
+      if (socket.userRol !== 'tecnico') return;
+      if (!Array.isArray(rubros)) return;
 
-    socket.on('tecnico:gps', ({ lat, lng, solicitudId }) => {
-      if (userRol !== 'tecnico') return;
-      if (solicitudId) {
-        io.to(`solicitud:${solicitudId}`).emit('tecnico:ubicacion', {
-          tecnicoId: userId, lat, lng, timestamp: new Date().toISOString(),
-        });
+      rubros.forEach(rubro => {
+        socket.join(`zona:${rubro}`);
+        console.log(`  📡 Técnico ${socket.userId} suscrito a zona:${rubro}`);
+      });
+    });
+
+    // ─── Unirse al room de una solicitud específica ────
+    socket.on('unirse_solicitud', async (solicitudId) => {
+      // Verificar que el usuario tiene acceso a esta solicitud
+      const result = await query(
+        'SELECT cliente_id, tecnico_id FROM solicitudes WHERE id = $1',
+        [solicitudId]
+      );
+      if (result.rows.length === 0) return;
+
+      const sol = result.rows[0];
+      if (sol.cliente_id === socket.userId || sol.tecnico_id === socket.userId) {
+        socket.join(`solicitud:${solicitudId}`);
+        console.log(`  📍 Usuario ${socket.userId} unido a solicitud:${solicitudId}`);
       }
-      updateTecnicoGPS(userId, lat, lng);
     });
 
-    socket.on('solicitud:join', (solicitudId) => {
-      socket.join(`solicitud:${solicitudId}`);
+    // ─── GPS: técnico envía su ubicación en tiempo real ─
+    socket.on('ubicacion_tecnico', async ({ solicitudId, latitud, longitud }) => {
+      if (socket.userRol !== 'tecnico') return;
+
+      // Actualizar ubicación en DB
+      await query(
+        `UPDATE tecnicos SET ultima_lat = $1, ultima_lng = $2, ultima_ubicacion_en = NOW()
+         WHERE usuario_id = $3`,
+        [latitud, longitud, socket.userId]
+      );
+
+      // Enviar al cliente de esa solicitud
+      socket.to(`solicitud:${solicitudId}`).emit('ubicacion_tecnico', {
+        solicitudId, latitud, longitud, timestamp: new Date()
+      });
     });
 
-    socket.on('solicitud:leave', (solicitudId) => {
-      socket.leave(`solicitud:${solicitudId}`);
-    });
-
-    socket.on('tecnico:disponible', async (disponible) => {
-      if (userRol !== 'tecnico') return;
-      await updateTecnicoDisponible(userId, disponible);
-      socket.emit('tecnico:disponible:ok', { disponible });
+    // ─── Mensaje de chat dentro de una solicitud ───────
+    socket.on('mensaje_solicitud', async ({ solicitudId, texto }) => {
+      const msg = {
+        de: socket.userId,
+        rol: socket.userRol,
+        texto,
+        timestamp: new Date()
+      };
+      io.to(`solicitud:${solicitudId}`).emit('mensaje_solicitud', msg);
     });
 
     socket.on('disconnect', () => {
-      const map = userRol === 'tecnico' ? connectedTecnicos : connectedUsers;
-      if (map.has(userId)) {
-        map.get(userId).delete(socket.id);
-        if (map.get(userId).size === 0) {
-          map.delete(userId);
-          if (userRol === 'tecnico') updateTecnicoDisponible(userId, false);
-        }
-      }
+      console.log(`🔌 Socket desconectado: ${socket.userId}`);
     });
   });
-}
 
-function emitirATecnico(tecnicoId, evento, data) {
-  if (_io) _io.to(`tecnico:${tecnicoId}`).emit(evento, data);
-}
-
-function emitirAUsuario(usuarioId, evento, data) {
-  if (_io) _io.to(`usuario:${usuarioId}`).emit(evento, data);
-}
-
-function emitirATecnicosDisponibles(tecnicoIds, evento, data) {
-  if (!_io) return;
-  tecnicoIds.forEach(id => {
-    if (connectedTecnicos.has(id)) _io.to(`tecnico:${id}`).emit(evento, data);
-  });
-}
-
-function emitirASolicitud(solicitudId, evento, data) {
-  if (_io) _io.to(`solicitud:${solicitudId}`).emit(evento, data);
-}
-
-async function updateTecnicoGPS(tecnicoId, lat, lng) {
-  try {
-    const { PrismaClient } = require('@prisma/client');
-    const prisma = new PrismaClient();
-    await prisma.tecnico.update({
-      where: { id: tecnicoId },
-      data: { latitud: lat, longitud: lng, ubicacionAt: new Date() },
-    });
-    await prisma.$disconnect();
-  } catch {}
-}
-
-async function updateTecnicoDisponible(tecnicoId, disponible) {
-  try {
-    const { PrismaClient } = require('@prisma/client');
-    const prisma = new PrismaClient();
-    await prisma.tecnico.update({ where: { id: tecnicoId }, data: { disponible } });
-    await prisma.$disconnect();
-  } catch {}
-}
-
-module.exports = {
-  initSocket,
-  emitirATecnico,
-  emitirAUsuario,
-  emitirATecnicosDisponibles,
-  emitirASolicitud,
-  connectedTecnicos,
-  connectedUsers,
+  return io;
 };
+
+const getIo = () => {
+  if (!io) throw new Error('Socket.io no inicializado');
+  return io;
+};
+
+module.exports = { initSocket, getIo };

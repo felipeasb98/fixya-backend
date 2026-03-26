@@ -1,65 +1,83 @@
 require('dotenv').config();
-const express = require('express');
 const http = require('http');
-const { Server } = require('socket.io');
-const cors = require('cors');
+const express = require('express');
 const helmet = require('helmet');
+const cors = require('cors');
 const morgan = require('morgan');
 
-const { initSocket } = require('./services/socketService');
-const { errorHandler } = require('./middlewares/errorHandler');
-const { rateLimiter } = require('./middlewares/rateLimiter');
+const { generalLimiter } = require('./middleware/rateLimiter');
+const { initSocket, getIo } = require('./services/socketService');
 
-const authRoutes = require('./routes/auth');
-const usuariosRoutes = require('./routes/usuarios');
-const tecnicosRoutes = require('./routes/tecnicos');
-const solicitudesRoutes = require('./routes/solicitudes');
-const postulacionesRoutes = require('./routes/postulaciones');
-const pagosRoutes = require('./routes/pagos');
-const ratingsRoutes = require('./routes/ratings');
-const notificacionesRoutes = require('./routes/notificaciones');
-const uploadRoutes = require('./routes/upload');
+// ── Rutas ─────────────────────────────────────────────
+const authRoutes        = require('./routes/auth');
+const solicitudRoutes   = require('./routes/solicitudes');
+const postulacionRoutes = require('./routes/postulaciones');
+const pagoRoutes        = require('./routes/pagos');
+const ratingRoutes      = require('./routes/ratings');
 
 const app = express();
 const server = http.createServer(app);
 
-const io = new Server(server, {
-  cors: { origin: process.env.FRONTEND_URL || '*', methods: ['GET', 'POST'], credentials: true },
-});
-initSocket(io);
+// ── Inicializar Socket.io ─────────────────────────────
+const io = initSocket(server);
 
+// ── Middleware global ─────────────────────────────────
 app.use(helmet());
-app.use(cors({ origin: process.env.FRONTEND_URL || '*', credentials: true }));
-app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
+app.use(cors({
+  origin: process.env.FRONTEND_URL || '*',
+  credentials: true
+}));
 app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true }));
-app.use((req, _res, next) => { req.io = io; next(); });
+app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
+app.use(generalLimiter);
 
-app.use('/api/auth', rateLimiter({ max: 10, windowMs: 15 * 60 * 1000 }));
-app.use('/api', rateLimiter({ max: 200, windowMs: 15 * 60 * 1000 }));
-
-app.use('/api/auth', authRoutes);
-app.use('/api/usuarios', usuariosRoutes);
-app.use('/api/tecnicos', tecnicosRoutes);
-app.use('/api/solicitudes', solicitudesRoutes);
-app.use('/api/postulaciones', postulacionesRoutes);
-app.use('/api/pagos', pagosRoutes);
-app.use('/api/ratings', ratingsRoutes);
-app.use('/api/notificaciones', notificacionesRoutes);
-app.use('/api/upload', uploadRoutes);
-
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', env: process.env.NODE_ENV, timestamp: new Date().toISOString() });
+// Inyectar io en cada request para que los controllers puedan emitir eventos
+app.use((req, res, next) => {
+  req.io = io;
+  next();
 });
 
-app.use((_req, res) => res.status(404).json({ error: 'Ruta no encontrada' }));
-app.use(errorHandler);
+// ── Rutas de la API ───────────────────────────────────
+app.use('/api/auth',          authRoutes);
+app.use('/api/solicitudes',   solicitudRoutes);
+app.use('/api/postulaciones', postulacionRoutes);
+app.use('/api/pagos',         pagoRoutes);
+app.use('/api/ratings',       ratingRoutes);
 
+// ── Health check ──────────────────────────────────────
+app.get('/health', (req, res) => {
+  res.json({
+    ok: true,
+    entorno: process.env.NODE_ENV,
+    timestamp: new Date().toISOString()
+  });
+});
+
+// ── 404 ───────────────────────────────────────────────
+app.use((req, res) => {
+  res.status(404).json({ error: `Ruta no encontrada: ${req.method} ${req.path}` });
+});
+
+// ── Error handler global ──────────────────────────────
+app.use((err, req, res, next) => {
+  console.error('Error no manejado:', err);
+  res.status(500).json({
+    error: process.env.NODE_ENV === 'production'
+      ? 'Error interno del servidor'
+      : err.message
+  });
+});
+
+// ── Iniciar servidor ──────────────────────────────────
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`\n🔧 FixYa Backend corriendo en puerto ${PORT}`);
-  console.log(`📡 Entorno: ${process.env.NODE_ENV}`);
-  console.log(`🔗 Health: http://localhost:${PORT}/health\n`);
+  console.log(`
+╔═══════════════════════════════════════╗
+║   🔧 FixYa Backend                    ║
+║   Puerto: ${PORT}                        ║
+║   Entorno: ${(process.env.NODE_ENV || 'development').padEnd(10)}            ║
+╚═══════════════════════════════════════╝
+  `);
 });
 
-module.exports = { app, server, io };
+module.exports = { app, server };
