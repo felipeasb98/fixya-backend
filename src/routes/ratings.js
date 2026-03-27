@@ -1,12 +1,13 @@
+const prisma = require('../lib/prisma');
 const express = require('express');
 const router = express.Router();
 const { body } = require('express-validator');
 const { validationResult } = require('express-validator');
-const { PrismaClient } = require('@prisma/client');
+
 const { authenticate } = require('../middlewares/authenticate');
 const { AppError } = require('../utils/AppError');
 
-const prisma = new PrismaClient();
+
 
 // POST /api/ratings — Cliente califica al técnico (y viceversa)
 router.post('/', authenticate, [

@@ -1,11 +1,12 @@
+const prisma = require('../lib/prisma');
 const { validationResult } = require('express-validator');
-const { PrismaClient } = require('@prisma/client');
+
 const { AppError } = require('../utils/AppError');
 const { generarCodigo } = require('../utils/helpers');
 const { notificarTecnicos, notificarUsuario, notificarTecnico } = require('../services/notificacionService');
 const { calcularDistanciaKm } = require('../utils/geo');
 
-const prisma = new PrismaClient();
+
 
 // ─────────────────────────────────────────────
 // Crear solicitud (cliente)

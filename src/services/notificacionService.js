@@ -1,11 +1,12 @@
-const { PrismaClient } = require('@prisma/client');
+const prisma = require('../lib/prisma');
+
 const {
   emitirATecnico,
   emitirAUsuario,
   emitirATecnicosDisponibles,
 } = require('./socketService');
 
-const prisma = new PrismaClient();
+
 
 // ─────────────────────────────────────────────
 // Notificar a técnicos disponibles cuando

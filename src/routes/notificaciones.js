@@ -1,10 +1,11 @@
+const prisma = require('../lib/prisma');
 const express = require('express');
 const router = express.Router();
-const { PrismaClient } = require('@prisma/client');
+
 const { authenticate } = require('../middlewares/authenticate');
 const { AppError } = require('../utils/AppError');
 
-const prisma = new PrismaClient();
+
 
 // GET /api/notificaciones — Mis notificaciones
 router.get('/', authenticate, async (req, res, next) => {

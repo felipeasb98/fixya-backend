@@ -1,13 +1,14 @@
+const prisma = require('../lib/prisma');
 const express = require('express');
 const router = express.Router();
 const { body } = require('express-validator');
 const { validationResult } = require('express-validator');
-const { PrismaClient } = require('@prisma/client');
+
 const { authenticate } = require('../middlewares/authenticate');
 const { soloRol } = require('../middlewares/soloRol');
 const { AppError } = require('../utils/AppError');
 
-const prisma = new PrismaClient();
+
 
 // GET /api/tecnicos/perfil — Perfil propio del técnico
 router.get('/perfil', authenticate, soloRol('tecnico'), async (req, res, next) => {

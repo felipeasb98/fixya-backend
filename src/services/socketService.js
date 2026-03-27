@@ -1,6 +1,7 @@
 const { verifyAccessToken } = require('../utils/jwt');
+const prisma = require('../lib/prisma');
 
-const connectedUsers = new Map();
+const connectedUsers   = new Map();
 const connectedTecnicos = new Map();
 let _io;
 
@@ -8,55 +9,73 @@ function initSocket(io) {
   _io = io;
 
   io.use((socket, next) => {
-    const token = socket.handshake.auth && socket.handshake.auth.token
-      ? socket.handshake.auth.token
-      : socket.handshake.query && socket.handshake.query.token;
+    const token = socket.handshake.auth?.token || socket.handshake.query?.token;
     if (!token) return next(new Error('Token requerido'));
     try {
       const payload = verifyAccessToken(token);
-      socket.userId = payload.id;
+      socket.userId  = payload.id;
       socket.userRol = payload.rol;
       next();
-    } catch (e) {
+    } catch {
       next(new Error('Token invalido'));
     }
   });
 
   io.on('connection', (socket) => {
-    const userId = socket.userId;
-    const userRol = socket.userRol;
+    const { userId, userRol } = socket;
 
     const map = userRol === 'tecnico' ? connectedTecnicos : connectedUsers;
     if (!map.has(userId)) map.set(userId, new Set());
     map.get(userId).add(socket.id);
     socket.join(userRol + ':' + userId);
 
-    socket.on('tecnico:gps', function(data) {
+    // GPS del técnico
+    socket.on('tecnico:gps', ({ lat, lng, solicitudId } = {}) => {
       if (userRol !== 'tecnico') return;
-      const lat = data.lat, lng = data.lng, solicitudId = data.solicitudId;
       if (solicitudId) {
         io.to('solicitud:' + solicitudId).emit('tecnico:ubicacion', {
-          tecnicoId: userId, lat: lat, lng: lng, timestamp: new Date().toISOString(),
+          tecnicoId: userId, lat, lng, timestamp: new Date().toISOString(),
         });
       }
       updateTecnicoGPS(userId, lat, lng);
     });
 
-    socket.on('solicitud:join', function(solicitudId) {
-      socket.join('solicitud:' + solicitudId);
+    // Unirse a sala de solicitud (con validación de acceso)
+    socket.on('solicitud:join', async (solicitudId) => {
+      try {
+        const solicitud = await prisma.solicitud.findUnique({
+          where: { id: solicitudId },
+          select: {
+            usuarioId: true,
+            tecnicoId: true,
+            postulaciones: { select: { tecnicoId: true } },
+          },
+        });
+        if (!solicitud) return;
+
+        const esCliente    = userRol === 'usuario' && solicitud.usuarioId === userId;
+        const esTecnico    = userRol === 'tecnico' && solicitud.tecnicoId === userId;
+        const esPostulante = userRol === 'tecnico' &&
+          solicitud.postulaciones.some(p => p.tecnicoId === userId);
+
+        if (esCliente || esTecnico || esPostulante) {
+          socket.join('solicitud:' + solicitudId);
+        }
+      } catch { /* ignorar errores de BD */ }
     });
 
-    socket.on('solicitud:leave', function(solicitudId) {
+    socket.on('solicitud:leave', (solicitudId) => {
       socket.leave('solicitud:' + solicitudId);
     });
 
-    socket.on('tecnico:disponible', function(disponible) {
+    // Toggle disponibilidad técnico
+    socket.on('tecnico:disponible', (disponible) => {
       if (userRol !== 'tecnico') return;
       updateTecnicoDisponible(userId, disponible);
-      socket.emit('tecnico:disponible:ok', { disponible: disponible });
+      socket.emit('tecnico:disponible:ok', { disponible });
     });
 
-    socket.on('disconnect', function() {
+    socket.on('disconnect', () => {
       const m = userRol === 'tecnico' ? connectedTecnicos : connectedUsers;
       if (m.has(userId)) {
         m.get(userId).delete(socket.id);
@@ -69,6 +88,22 @@ function initSocket(io) {
   });
 }
 
+// Helpers internos — usan el singleton, sin disconnect
+function updateTecnicoGPS(tecnicoId, lat, lng) {
+  prisma.tecnico.update({
+    where: { id: tecnicoId },
+    data: { latitud: lat, longitud: lng, ubicacionAt: new Date() },
+  }).catch(() => {});
+}
+
+function updateTecnicoDisponible(tecnicoId, disponible) {
+  prisma.tecnico.update({
+    where: { id: tecnicoId },
+    data: { disponible },
+  }).catch(() => {});
+}
+
+// Emitters
 function emitirATecnico(tecnicoId, evento, data) {
   if (_io) _io.to('tecnico:' + tecnicoId).emit(evento, data);
 }
@@ -79,7 +114,7 @@ function emitirAUsuario(usuarioId, evento, data) {
 
 function emitirATecnicosDisponibles(tecnicoIds, evento, data) {
   if (!_io) return;
-  tecnicoIds.forEach(function(id) {
+  tecnicoIds.forEach(id => {
     if (connectedTecnicos.has(id)) _io.to('tecnico:' + id).emit(evento, data);
   });
 }
@@ -88,32 +123,12 @@ function emitirASolicitud(solicitudId, evento, data) {
   if (_io) _io.to('solicitud:' + solicitudId).emit(evento, data);
 }
 
-function updateTecnicoGPS(tecnicoId, lat, lng) {
-  try {
-    const prisma = new (require('@prisma/client').PrismaClient)();
-    prisma.tecnico.update({
-      where: { id: tecnicoId },
-      data: { latitud: lat, longitud: lng, ubicacionAt: new Date() },
-    }).then(function() { prisma.$disconnect(); }).catch(function() { prisma.$disconnect(); });
-  } catch(e) {}
-}
-
-function updateTecnicoDisponible(tecnicoId, disponible) {
-  try {
-    const prisma = new (require('@prisma/client').PrismaClient)();
-    prisma.tecnico.update({
-      where: { id: tecnicoId },
-      data: { disponible: disponible },
-    }).then(function() { prisma.$disconnect(); }).catch(function() { prisma.$disconnect(); });
-  } catch(e) {}
-}
-
 module.exports = {
-  initSocket: initSocket,
-  emitirATecnico: emitirATecnico,
-  emitirAUsuario: emitirAUsuario,
-  emitirATecnicosDisponibles: emitirATecnicosDisponibles,
-  emitirASolicitud: emitirASolicitud,
-  connectedTecnicos: connectedTecnicos,
-  connectedUsers: connectedUsers,
+  initSocket,
+  emitirATecnico,
+  emitirAUsuario,
+  emitirATecnicosDisponibles,
+  emitirASolicitud,
+  connectedTecnicos,
+  connectedUsers,
 };

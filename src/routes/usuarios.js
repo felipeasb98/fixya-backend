@@ -1,14 +1,15 @@
+const prisma = require('../lib/prisma');
 const express = require('express');
 const router = express.Router();
 const { body } = require('express-validator');
 const { validationResult } = require('express-validator');
-const { PrismaClient } = require('@prisma/client');
+
 const { authenticate } = require('../middlewares/authenticate');
 const { soloRol } = require('../middlewares/soloRol');
 const { AppError } = require('../utils/AppError');
 const multer = require('multer');
 
-const prisma = new PrismaClient();
+
 
 // ── USUARIOS ──────────────────────────────────────────────────
 

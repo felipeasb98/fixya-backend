@@ -1,10 +1,9 @@
-const { v4: uuidv4 } = require('uuid');
-
-// ── Generar código único tipo "FY-3001" ────────────────────────
-let _counter = 3000;
+// ── Generar código único tipo "FY-1711234567-429" ─────────────
+// Usa timestamp + random para garantizar unicidad entre deploys
 function generarCodigo() {
-  _counter++;
-  return `FY-${_counter}`;
+  const ts = Date.now().toString(36).toUpperCase();
+  const rnd = Math.floor(Math.random() * 9999).toString().padStart(4, '0');
+  return `FY-${ts}-${rnd}`;
 }
 
 // ── Formatear precio chileno ───────────────────────────────────

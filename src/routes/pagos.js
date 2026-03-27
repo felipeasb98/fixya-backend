@@ -1,15 +1,16 @@
+const prisma = require('../lib/prisma');
 const express = require('express');
 const router = express.Router();
 const { body } = require('express-validator');
 const { validationResult } = require('express-validator');
-const { PrismaClient } = require('@prisma/client');
+
 const { authenticate } = require('../middlewares/authenticate');
 const { soloRol } = require('../middlewares/soloRol');
 const { AppError } = require('../utils/AppError');
 const { calcularComision } = require('../utils/helpers');
 const { notificarTecnico } = require('../services/notificacionService');
 
-const prisma = new PrismaClient();
+
 
 // POST /api/pagos/iniciar — Cliente inicia el pago
 router.post('/iniciar', authenticate, soloRol('usuario'), [
