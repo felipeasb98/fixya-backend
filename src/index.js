@@ -19,6 +19,7 @@ const pagosRoutes = require('./routes/pagos');
 const ratingsRoutes = require('./routes/ratings');
 const notificacionesRoutes = require('./routes/notificaciones');
 const uploadRoutes = require('./routes/upload');
+const rubrosRoutes = require('./routes/rubros');
 
 const app = express();
 const server = http.createServer(app);
@@ -47,6 +48,7 @@ app.use('/api/pagos', pagosRoutes);
 app.use('/api/ratings', ratingsRoutes);
 app.use('/api/notificaciones', notificacionesRoutes);
 app.use('/api/upload', uploadRoutes);
+app.use('/api/rubros', rubrosRoutes); // público — sin autenticación
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', env: process.env.NODE_ENV, timestamp: new Date().toISOString() });
