@@ -34,12 +34,13 @@ async function notificarTecnicos(io, solicitud) {
     trabajo: solicitud.trabajo,
     urgencia: solicitud.urgencia,
     comuna: solicitud.comuna,
+    direccion: solicitud.direccion,
     totalEstimado: solicitud.totalEstimado,
+    moBase: solicitud.moBase,
     latitud: solicitud.latitud,
     longitud: solicitud.longitud,
     descripcion: solicitud.descripcion || '',
     fotosProblema: solicitud.fotosProblema || [],
-    moBase: solicitud.moBase,
   });
 
   // Guardar notificación en BD para cada técnico
