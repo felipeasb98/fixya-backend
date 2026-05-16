@@ -37,6 +37,9 @@ async function notificarTecnicos(io, solicitud) {
     totalEstimado: solicitud.totalEstimado,
     latitud: solicitud.latitud,
     longitud: solicitud.longitud,
+    descripcion: solicitud.descripcion || '',
+    fotosProblema: solicitud.fotosProblema || [],
+    moBase: solicitud.moBase,
   });
 
   // Guardar notificación en BD para cada técnico
