@@ -29,7 +29,7 @@ router.post('/iniciar', authenticate, soloRol('usuario'), [
     });
     if (!solicitud) throw new AppError('Solicitud no encontrada', 404);
     if (solicitud.usuarioId !== req.user.id) throw new AppError('Sin acceso', 403);
-    if (!['CONFIRMADO', 'EN_CAMINO', 'EN_TRABAJO'].includes(solicitud.estado)) {
+    if (!['ACEPTADA', 'CONFIRMADO', 'EN_CAMINO', 'EN_TRABAJO'].includes(solicitud.estado)) {
       throw new AppError('La solicitud no está lista para pagar', 409);
     }
 
