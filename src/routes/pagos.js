@@ -227,4 +227,25 @@ router.get('/historial', authenticate, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// TEMPORAL - diagnóstico Flow
+router.get('/_debug_flow', (req, res) => {
+  const key = process.env.FLOW_API_KEY || '';
+  const secret = process.env.FLOW_SECRET_KEY || '';
+  res.json({
+    apiKey: {
+      existe: !!key,
+      largo: key.length,
+      primeros6: key.substring(0, 6),
+      ultimos4: key.substring(key.length - 4),
+      tieneEspacios: key !== key.trim(),
+    },
+    secret: {
+      existe: !!secret,
+      largo: secret.length,
+      tieneEspacios: secret !== secret.trim(),
+    },
+    env: process.env.FLOW_ENV,
+  });
+});
+
 module.exports = router;
