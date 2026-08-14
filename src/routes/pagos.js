@@ -71,7 +71,7 @@ router.post('/iniciar', authenticate, soloRol('usuario'), [
       subject:         `FixYa · ${solicitud.trabajo} · ${solicitud.codigo}`,
       email:           solicitud.usuario.email,
       urlConfirmacion: `${baseUrl}/api/pagos/webhook/flow`,
-      urlRetorno:      `${process.env.FRONTEND_URL || 'https://fixya.netlify.app'}/app.html?pago=ok`,
+      urlRetorno:      `${process.env.FRONTEND_APP_URL || 'https://felipeasb98.github.io/fixya-app'}/app.html?pago=ok`,
     });
 
     // Guardar token de Flow
@@ -147,7 +147,29 @@ router.post('/webhook/flow', async (req, res, next) => {
 // ─────────────────────────────────────────────────────────────
 router.get('/retorno', async (req, res) => {
   const { token } = req.query;
-  const frontendUrl = process.env.FRONTEND_URL || 'https://fixya.netlify.app';
+  const frontendUrl = process.env.FRONTEND_APP_URL || 'https://felipeasb98.github.io/fixya-app';
+
+  if (!token) return res.redirect(`${frontendUrl}/app.html?pago=error`);
+
+  try {
+    const resultado = await confirmarPago(token);
+    if (resultado.ok) {
+      res.redirect(`${frontendUrl}/app.html?pago=ok`);
+    } else {
+      res.redirect(`${frontendUrl}/app.html?pago=fallido`);
+    }
+  } catch {
+    res.redirect(`${frontendUrl}/app.html?pago=error`);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
+// POST /api/pagos/retorno
+// Flow a veces redirige con POST — recibimos y hacemos GET redirect
+// ─────────────────────────────────────────────────────────────
+router.post('/retorno', async (req, res) => {
+  const token = req.body?.token || req.query?.token;
+  const frontendUrl = process.env.FRONTEND_APP_URL || 'https://felipeasb98.github.io/fixya-app';
 
   if (!token) return res.redirect(`${frontendUrl}/app.html?pago=error`);
 
