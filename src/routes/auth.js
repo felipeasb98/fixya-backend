@@ -4,7 +4,7 @@ const { body } = require('express-validator');
 const authController = require('../controllers/authController');
 const { authenticate } = require('../middlewares/authenticate');
 
-const emailVal = body('email').isEmail().normalizeEmail().withMessage('Email invalido');
+const emailVal = body('email').isEmail().normalizeEmail({ gmail_remove_dots: false }).withMessage('Email invalido');
 const passVal = body('password').isLength({ min: 8 }).withMessage('Minimo 8 caracteres');
 
 router.post('/registro/usuario', [
