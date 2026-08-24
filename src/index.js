@@ -24,13 +24,17 @@ const rubrosRoutes = require('./routes/rubros');
 const app = express();
 const server = http.createServer(app);
 
+// Quitar slash final de FRONTEND_URL — un valor con "/" al final rompe
+// la comparación exacta de origen que exige CORS (ya pasó dos veces).
+const FRONTEND_ORIGIN = (process.env.FRONTEND_URL || '*').replace(/\/+$/, '');
+
 const io = new Server(server, {
-  cors: { origin: process.env.FRONTEND_URL || '*', methods: ['GET', 'POST'], credentials: true },
+  cors: { origin: FRONTEND_ORIGIN, methods: ['GET', 'POST'], credentials: true },
 });
 initSocket(io);
 
 app.use(helmet());
-app.use(cors({ origin: process.env.FRONTEND_URL || '*', credentials: true }));
+app.use(cors({ origin: FRONTEND_ORIGIN, credentials: true }));
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
