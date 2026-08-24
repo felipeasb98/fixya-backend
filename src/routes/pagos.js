@@ -71,7 +71,7 @@ router.post('/iniciar', authenticate, soloRol('usuario'), [
       subject:         `FixYa · ${solicitud.trabajo} · ${solicitud.codigo}`,
       email:           solicitud.usuario.email,
       urlConfirmacion: `${baseUrl}/api/pagos/webhook/flow`,
-      urlRetorno:      `${process.env.FRONTEND_APP_URL || 'https://felipeasb98.github.io/fixya-app'}/app.html?pago=ok`,
+      urlRetorno:      `${baseUrl}/api/pagos/retorno`,
     });
 
     // Guardar token de Flow
