@@ -132,7 +132,7 @@ model Solicitud {
   updatedAt             DateTime        @updatedAt
 
   postulaciones Postulacion[]
-  pago          Pago?
+  pagos         Pago[]
   rating        Rating?
 
   @@map("solicitudes")
@@ -167,7 +167,7 @@ model Postulacion {
 
 model Pago {
   id            String     @id @default(uuid())
-  solicitudId   String     @unique
+  solicitudId   String
   solicitud     Solicitud  @relation(fields: [solicitudId], references: [id])
   tecnicoId     String
   tecnico       Tecnico    @relation(fields: [tecnicoId], references: [id])
@@ -176,6 +176,7 @@ model Pago {
   comisionMonto Float
   montoTecnico  Float
   metodo        String
+  tipo          String     @default("inicial")
   estado        EstadoPago @default(PENDIENTE)
   proveedorId   String?
   proveedorData Json?

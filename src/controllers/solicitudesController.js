@@ -87,7 +87,7 @@ exports.misSolicitudes = async (req, res, next) => {
         include: {
           rubro: true,
           tecnico: { select: { nombre: true, avatarUrl: true, ratingPromedio: true } },
-          pago: { select: { estado: true, monto: true } },
+          pagos: { select: { estado: true, monto: true, tipo: true } },
         },
       }),
       prisma.solicitud.count({ where }),
@@ -188,12 +188,30 @@ exports.obtener = async (req, res, next) => {
             },
           },
         },
-        pago: true,
+        pagos: true,
         rating: true,
       },
     });
 
     if (!solicitud) throw new AppError('Solicitud no encontrada', 404);
+
+    // Auto-aprobación de materiales: si pasaron 10 min desde que el técnico
+    // inició el trabajo y el cliente no confirmó ni reportó un faltante,
+    // se marca como confirmado (sin necesitar un job/cron aparte).
+    const ESTADOS_POST_MATERIALES = ['EN_TRABAJO', 'ESPERANDO_CONF', 'COMPLETADO'];
+    if (
+      ESTADOS_POST_MATERIALES.includes(solicitud.estado) &&
+      !solicitud.materialesConfirmados &&
+      !solicitud.reporteFaltante &&
+      solicitud.trabajoInicioAt &&
+      (Date.now() - new Date(solicitud.trabajoInicioAt).getTime()) > 10 * 60 * 1000
+    ) {
+      await prisma.solicitud.update({
+        where: { id: solicitud.id },
+        data: { materialesConfirmados: true },
+      });
+      solicitud.materialesConfirmados = true;
+    }
 
     // Verificar que pertenece al usuario/técnico que consulta
     const { id, rol } = req.user;
@@ -388,7 +406,7 @@ exports.solicitarModTarifa = async (req, res, next) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(422).json({ errors: errors.array() });
 
-    const { moModificada, motivoModTarifa } = req.body;
+    const { moModificada, motivoModTarifa, fotoDificultad } = req.body;
     const solicitud = await getSolicitudTecnico(req.params.id, req.user.id);
 
     if (solicitud.estado !== 'EN_TRABAJO') throw new AppError('Solo puedes modificar tarifa durante el trabajo', 409);
@@ -405,6 +423,7 @@ exports.solicitarModTarifa = async (req, res, next) => {
       data: {
         moModificada,
         motivoModTarifa,
+        ...(fotoDificultad ? { fotosTrabajo: { push: fotoDificultad } } : {}),
         modTarifaEstado: 'pendiente',
         totalFinal: nuevoTotal,
       },
@@ -461,6 +480,67 @@ exports.responderModTarifa = async (req, res, next) => {
     });
 
     res.json({ message: msg, solicitud: actualizada });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─────────────────────────────────────────────
+// Cliente confirma que los materiales están OK
+// ─────────────────────────────────────────────
+exports.confirmarMateriales = async (req, res, next) => {
+  try {
+    const solicitud = await getSolicitudPropia(req.params.id, req.user.id, 'usuario');
+
+    const estadosValidos = ['EN_TRABAJO', 'ESPERANDO_CONF', 'COMPLETADO'];
+    if (!estadosValidos.includes(solicitud.estado)) {
+      throw new AppError('Estado inválido para confirmar materiales', 409);
+    }
+    if (solicitud.materialesConfirmados) {
+      return res.json({ message: 'Materiales ya confirmados', solicitud });
+    }
+
+    const actualizada = await prisma.solicitud.update({
+      where: { id: solicitud.id },
+      data: { materialesConfirmados: true },
+    });
+
+    res.json({ message: 'Materiales confirmados', solicitud: actualizada });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─────────────────────────────────────────────
+// Cliente reporta materiales faltantes
+// ─────────────────────────────────────────────
+exports.reportarFaltante = async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(422).json({ errors: errors.array() });
+
+    const { detalle } = req.body;
+    const solicitud = await getSolicitudPropia(req.params.id, req.user.id, 'usuario');
+
+    if (solicitud.estado !== 'EN_TRABAJO') {
+      throw new AppError('Estado inválido para reportar faltante', 409);
+    }
+
+    const actualizada = await prisma.solicitud.update({
+      where: { id: solicitud.id },
+      data: { reporteFaltante: detalle },
+    });
+
+    if (solicitud.tecnicoId) {
+      await notificarTecnico(req.io, solicitud.tecnicoId, {
+        tipo: 'reporte_faltante',
+        titulo: 'El cliente reportó un faltante ⚠️',
+        cuerpo: detalle,
+        solicitudId: solicitud.id,
+      });
+    }
+
+    res.json({ message: 'Reporte enviado al técnico', solicitud: actualizada });
   } catch (err) {
     next(err);
   }

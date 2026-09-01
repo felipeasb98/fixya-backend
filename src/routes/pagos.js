@@ -33,8 +33,8 @@ router.post('/iniciar', authenticate, soloRol('usuario'), [
       throw new AppError('La solicitud no está lista para pagar', 409);
     }
 
-    // Verificar si ya hay un pago iniciado
-    const pagoExistente = await prisma.pago.findUnique({ where: { solicitudId } });
+    // Verificar si ya hay un pago inicial iniciado
+    const pagoExistente = await prisma.pago.findFirst({ where: { solicitudId, tipo: 'inicial' } });
     if (pagoExistente && pagoExistente.estado === 'EN_ESCROW') {
       throw new AppError('Esta solicitud ya fue pagada', 409);
     }
@@ -47,7 +47,7 @@ router.post('/iniciar', authenticate, soloRol('usuario'), [
     // Crear o actualizar registro de pago
     const pago = pagoExistente
       ? await prisma.pago.update({
-          where: { solicitudId },
+          where: { id: pagoExistente.id },
           data: { monto, comisionPct, comisionMonto, montoTecnico, metodo: 'flow', estado: 'PENDIENTE' },
         })
       : await prisma.pago.create({
@@ -59,6 +59,7 @@ router.post('/iniciar', authenticate, soloRol('usuario'), [
             comisionMonto,
             montoTecnico,
             metodo: 'flow',
+            tipo: 'inicial',
             estado: 'PENDIENTE',
           },
         });
@@ -97,6 +98,97 @@ router.post('/iniciar', authenticate, soloRol('usuario'), [
 });
 
 // ─────────────────────────────────────────────────────────────
+// POST /api/pagos/adicional/iniciar
+// Cliente paga el adicional que ya aceptó (modTarifaEstado === 'aceptada')
+// ─────────────────────────────────────────────────────────────
+router.post('/adicional/iniciar', authenticate, soloRol('usuario'), [
+  body('solicitudId').notEmpty(),
+], async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(422).json({ errors: errors.array() });
+
+    const { solicitudId } = req.body;
+
+    const solicitud = await prisma.solicitud.findUnique({
+      where: { id: solicitudId },
+      include: { tecnico: true, usuario: true },
+    });
+    if (!solicitud) throw new AppError('Solicitud no encontrada', 404);
+    if (solicitud.usuarioId !== req.user.id) throw new AppError('Sin acceso', 403);
+    if (solicitud.modTarifaEstado !== 'aceptada') {
+      throw new AppError('No hay un adicional aceptado pendiente de pago', 409);
+    }
+
+    const pagoInicial = await prisma.pago.findFirst({ where: { solicitudId, tipo: 'inicial' } });
+    if (!pagoInicial) throw new AppError('No existe el pago inicial de esta solicitud', 409);
+
+    const pagoAdicionalExistente = await prisma.pago.findFirst({ where: { solicitudId, tipo: 'adicional' } });
+    if (pagoAdicionalExistente && pagoAdicionalExistente.estado === 'EN_ESCROW') {
+      throw new AppError('El adicional ya fue pagado', 409);
+    }
+
+    const montoAdicional = Math.round((solicitud.totalFinal || 0) - pagoInicial.monto);
+    if (montoAdicional <= 0) {
+      throw new AppError('No hay monto adicional pendiente de cobrar', 409);
+    }
+
+    const comisionPct   = solicitud.tecnico?.comisionPct || 18;
+    const comisionMonto = calcularComision(montoAdicional, comisionPct);
+    const montoTecnico  = montoAdicional - comisionMonto;
+
+    const pago = pagoAdicionalExistente
+      ? await prisma.pago.update({
+          where: { id: pagoAdicionalExistente.id },
+          data: { monto: montoAdicional, comisionPct, comisionMonto, montoTecnico, metodo: 'flow', estado: 'PENDIENTE' },
+        })
+      : await prisma.pago.create({
+          data: {
+            solicitudId,
+            tecnicoId:    solicitud.tecnicoId,
+            monto:        montoAdicional,
+            comisionPct,
+            comisionMonto,
+            montoTecnico,
+            metodo: 'flow',
+            tipo: 'adicional',
+            estado: 'PENDIENTE',
+          },
+        });
+
+    const baseUrl = process.env.BACKEND_URL || 'https://fixya-backend-production.up.railway.app';
+    const { token, urlPago } = await crearPago({
+      commerceOrder:   pago.id,
+      amount:          montoAdicional,
+      subject:         `FixYa · Adicional · ${solicitud.trabajo} · ${solicitud.codigo}`,
+      email:           solicitud.usuario.email,
+      urlConfirmacion: `${baseUrl}/api/pagos/webhook/flow`,
+      urlRetorno:      `${baseUrl}/api/pagos/retorno`,
+    });
+
+    await prisma.pago.update({
+      where: { id: pago.id },
+      data:  { proveedorId: token },
+    });
+
+    res.json({
+      message: 'Pago de adicional iniciado',
+      pagoId: pago.id,
+      urlPago,
+      monto: montoAdicional,
+      desglose: {
+        manoDeObra: montoAdicional,
+        materiales: 0,
+        comision:   comisionMonto,
+        total:      montoAdicional,
+        alTecnico:  montoTecnico,
+        mo:         montoTecnico,
+      },
+    });
+  } catch (err) { next(err); }
+});
+
+// ─────────────────────────────────────────────────────────────
 // POST /api/pagos/webhook/flow
 // Flow llama aquí cuando el pago se confirma
 // ─────────────────────────────────────────────────────────────
@@ -128,10 +220,11 @@ router.post('/webhook/flow', async (req, res, next) => {
 
       // Notificar al técnico que el pago fue recibido
       if (pago.solicitud.tecnicoId) {
+        const esAdicional = pago.tipo === 'adicional';
         await notificarTecnico(req.io, pago.solicitud.tecnicoId, {
-          tipo:        'pago_recibido',
-          titulo:      '💰 Pago recibido',
-          cuerpo:      `El cliente pagó $${Math.round(pago.monto).toLocaleString('es-CL')}. El dinero se liberará al confirmar el trabajo.`,
+          tipo:        esAdicional ? 'pago_adicional_recibido' : 'pago_recibido',
+          titulo:      esAdicional ? '💰 Pago del adicional recibido' : '💰 Pago recibido',
+          cuerpo:      `El cliente pagó $${Math.round(pago.monto).toLocaleString('es-CL')}${esAdicional ? ' por el adicional' : ''}. El dinero se liberará al confirmar el trabajo.`,
           solicitudId: pago.solicitudId,
         });
       }

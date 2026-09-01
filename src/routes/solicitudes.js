@@ -25,6 +25,11 @@ router.patch('/:id/inicio-trabajo', authenticate, soloRol('tecnico'), ctrl.inici
 router.patch('/:id/trabajo-terminado', authenticate, soloRol('tecnico'), ctrl.trabajoTerminado);
 router.patch('/:id/confirmar', authenticate, soloRol('usuario'), ctrl.confirmarTrabajo);
 
+router.patch('/:id/confirmar-materiales', authenticate, soloRol('usuario'), ctrl.confirmarMateriales);
+router.post('/:id/reportar-faltante', authenticate, soloRol('usuario'), [
+  body('detalle').trim().notEmpty(),
+], ctrl.reportarFaltante);
+
 router.post('/:id/mod-tarifa', authenticate, soloRol('tecnico'), [
   body('moModificada').isFloat({ min: 0 }),
   body('motivoModTarifa').trim().notEmpty(),
