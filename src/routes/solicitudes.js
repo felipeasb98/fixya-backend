@@ -39,6 +39,11 @@ router.patch('/:id/resp-tarifa', authenticate, soloRol('usuario'), [
   body('decision').isIn(['aceptar', 'rechazar']),
 ], ctrl.responderModTarifa);
 
+// Soporte — protegido con x-admin-key, sin rol/login propio todavía
+router.post('/:id/revisar-tarifa', [
+  body('decision').isIn(['aprobar', 'rechazar']),
+], ctrl.revisarModTarifa);
+
 router.patch('/:id/cancelar', authenticate, [
   body('motivo').trim().notEmpty(),
 ], ctrl.cancelar);

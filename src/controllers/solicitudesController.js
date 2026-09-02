@@ -418,25 +418,101 @@ exports.solicitarModTarifa = async (req, res, next) => {
     const nuevaComision = (moModificada * tecnico.comisionPct) / 100;
     const nuevoTotal = moModificada + (solicitud.matEstimado || 0) + nuevaComision;
 
+    // Si el nuevo monto sube 30% o más respecto al trabajo original
+    // (M.O. + materiales, sin comisión), requiere validación humana de
+    // FixYa antes de llegar al cliente. Bajo ese umbral, pasa directo.
+    const original = (solicitud.moBase || 0) + (solicitud.matEstimado || 0);
+    const aumentoPct = original > 0 ? (moModificada - original) / original : 0;
+    const requiereRevision = aumentoPct >= 0.30;
+
     const actualizada = await prisma.solicitud.update({
       where: { id: solicitud.id },
       data: {
         moModificada,
         motivoModTarifa,
         ...(fotoDificultad ? { fotosTrabajo: { push: fotoDificultad } } : {}),
-        modTarifaEstado: 'pendiente',
+        modTarifaEstado: requiereRevision ? 'pendiente_revision' : 'pendiente',
         totalFinal: nuevoTotal,
       },
     });
 
-    await notificarUsuario(req.io, solicitud.usuarioId, {
-      tipo: 'mod_tarifa',
-      titulo: 'Cambio de tarifa solicitado ⚠️',
-      cuerpo: `El técnico solicita ajustar la tarifa. Nuevo total estimado: $${Math.round(nuevoTotal).toLocaleString('es-CL')}`,
-      solicitudId: solicitud.id,
-    });
+    if (requiereRevision) {
+      // No se notifica al cliente todavía — queda bloqueado hasta que
+      // soporte lo apruebe (por ahora, vía POST /revisar-tarifa manual).
+      console.log(`[ModTarifa] Solicitud ${solicitud.id} requiere revisión humana — aumento ${(aumentoPct * 100).toFixed(1)}%`);
+    } else {
+      await notificarUsuario(req.io, solicitud.usuarioId, {
+        tipo: 'mod_tarifa',
+        titulo: 'Cambio de tarifa solicitado ⚠️',
+        cuerpo: `El técnico solicita ajustar la tarifa. Nuevo total estimado: $${Math.round(nuevoTotal).toLocaleString('es-CL')}`,
+        solicitudId: solicitud.id,
+      });
+    }
 
-    res.json({ message: 'Modificación enviada al cliente', solicitud: actualizada });
+    res.json({
+      message: requiereRevision
+        ? 'Tu ajuste supera el 30% del valor original y requiere validación de FixYa antes de llegar al cliente.'
+        : 'Modificación enviada al cliente',
+      solicitud: actualizada,
+      requiereRevision,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─────────────────────────────────────────────
+// Soporte aprueba/rechaza un ajuste de tarifa que
+// superó el 30% — protegido con clave compartida
+// hasta que exista un canal/rol de soporte real.
+// ─────────────────────────────────────────────
+exports.revisarModTarifa = async (req, res, next) => {
+  try {
+    const adminKey = req.headers['x-admin-key'];
+    if (!adminKey || !process.env.ADMIN_KEY || adminKey !== process.env.ADMIN_KEY) {
+      throw new AppError('No autorizado', 403);
+    }
+
+    const { decision } = req.body; // 'aprobar' | 'rechazar'
+    if (!['aprobar', 'rechazar'].includes(decision)) {
+      throw new AppError('decision debe ser aprobar o rechazar', 422);
+    }
+
+    const solicitud = await prisma.solicitud.findUnique({ where: { id: req.params.id } });
+    if (!solicitud) throw new AppError('Solicitud no encontrada', 404);
+    if (solicitud.modTarifaEstado !== 'pendiente_revision') {
+      throw new AppError('No hay un ajuste pendiente de revisión', 409);
+    }
+
+    if (decision === 'aprobar') {
+      const actualizada = await prisma.solicitud.update({
+        where: { id: solicitud.id },
+        data: { modTarifaEstado: 'pendiente' },
+      });
+
+      await notificarUsuario(req.io, solicitud.usuarioId, {
+        tipo: 'mod_tarifa',
+        titulo: 'Cambio de tarifa solicitado ⚠️',
+        cuerpo: `El técnico solicita ajustar la tarifa. Nuevo total estimado: $${Math.round(solicitud.totalFinal).toLocaleString('es-CL')}`,
+        solicitudId: solicitud.id,
+      });
+
+      res.json({ message: 'Aprobado — cliente notificado', solicitud: actualizada });
+    } else {
+      const actualizada = await prisma.solicitud.update({
+        where: { id: solicitud.id },
+        data: { modTarifaEstado: 'rechazada', moModificada: null, totalFinal: null },
+      });
+
+      await notificarTecnico(req.io, solicitud.tecnicoId, {
+        tipo: 'tarifa_rechazada',
+        titulo: 'Ajuste no aprobado ❌',
+        cuerpo: 'FixYa no validó este ajuste de tarifa. Contacta a soporte si tienes dudas.',
+        solicitudId: solicitud.id,
+      });
+
+      res.json({ message: 'Rechazado — técnico notificado', solicitud: actualizada });
+    }
   } catch (err) {
     next(err);
   }
