@@ -7,6 +7,7 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 
 const { initSocket } = require('./services/socketService');
+const { liberarPagosVencidos } = require('./services/liberarPagosService');
 const { errorHandler } = require('./middlewares/errorHandler');
 const { rateLimiter } = require('./middlewares/rateLimiter');
 
@@ -66,6 +67,11 @@ server.listen(PORT, () => {
   console.log('FixYa Backend corriendo en puerto ' + PORT);
   console.log('Entorno: ' + process.env.NODE_ENV);
   console.log('Health: http://localhost:' + PORT + '/health');
+
+  // Liberación automática de pagos (48 hrs post-confirmación) — se revisa
+  // cada 15 min mientras el servidor esté vivo, sin necesitar cron externo.
+  liberarPagosVencidos(io);
+  setInterval(() => liberarPagosVencidos(io), 15 * 60 * 1000);
 });
 
 module.exports = { app, server, io };
