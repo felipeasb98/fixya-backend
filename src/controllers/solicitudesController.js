@@ -5,6 +5,7 @@ const { AppError } = require('../utils/AppError');
 const { generarCodigo } = require('../utils/helpers');
 const { notificarTecnicos, notificarUsuario, notificarTecnico } = require('../services/notificacionService');
 const { calcularDistanciaKm } = require('../utils/geo');
+const { crearTicketAjusteTarifa } = require('../services/ticketingProvider');
 
 
 
@@ -413,7 +414,7 @@ exports.solicitarModTarifa = async (req, res, next) => {
 
     const tecnico = await prisma.tecnico.findUnique({
       where: { id: req.user.id },
-      select: { comisionPct: true },
+      select: { nombre: true, comisionPct: true },
     });
     const nuevaComision = (moModificada * tecnico.comisionPct) / 100;
     const nuevoTotal = moModificada + (solicitud.matEstimado || 0) + nuevaComision;
@@ -425,7 +426,7 @@ exports.solicitarModTarifa = async (req, res, next) => {
     const aumentoPct = original > 0 ? (moModificada - original) / original : 0;
     const requiereRevision = aumentoPct >= 0.30;
 
-    const actualizada = await prisma.solicitud.update({
+    let actualizada = await prisma.solicitud.update({
       where: { id: solicitud.id },
       data: {
         moModificada,
@@ -438,8 +439,17 @@ exports.solicitarModTarifa = async (req, res, next) => {
 
     if (requiereRevision) {
       // No se notifica al cliente todavía — queda bloqueado hasta que
-      // soporte lo apruebe (por ahora, vía POST /revisar-tarifa manual).
-      console.log(`[ModTarifa] Solicitud ${solicitud.id} requiere revisión humana — aumento ${(aumentoPct * 100).toFixed(1)}%`);
+      // soporte lo apruebe. Se crea un ticket en la mesa de ayuda externa
+      // (ver services/ticketingProvider.js); si no está configurada
+      // todavía, queda pendiente para revisar manualmente vía Railway.
+      const ticketId = await crearTicketAjusteTarifa({ solicitud: actualizada, tecnico, aumentoPct: aumentoPct * 100 });
+      if (ticketId) {
+        actualizada = await prisma.solicitud.update({
+          where: { id: solicitud.id },
+          data: { ticketSoporteId: ticketId },
+        });
+      }
+      console.log(`[ModTarifa] Solicitud ${solicitud.id} requiere revisión humana — aumento ${(aumentoPct * 100).toFixed(1)}%${ticketId ? ` — ticket ${ticketId}` : ''}`);
     } else {
       await notificarUsuario(req.io, solicitud.usuarioId, {
         tipo: 'mod_tarifa',
@@ -462,9 +472,61 @@ exports.solicitarModTarifa = async (req, res, next) => {
 };
 
 // ─────────────────────────────────────────────
+// Lógica compartida: aplicar la decisión de soporte
+// sobre un ajuste de tarifa en revisión. La llama tanto
+// la ruta HTTP protegida con clave (revisarModTarifa,
+// para probar/operar manualmente) como el webhook de la
+// mesa de ayuda externa (webhookSoporte, más abajo) —
+// es el único punto donde vive esta lógica de negocio,
+// para que cambiar de proveedor no la duplique ni la rompa.
+// ─────────────────────────────────────────────
+async function aplicarDecisionTarifa(io, solicitudId, decision) {
+  if (!['aprobar', 'rechazar'].includes(decision)) {
+    throw new AppError('decision debe ser aprobar o rechazar', 422);
+  }
+
+  const solicitud = await prisma.solicitud.findUnique({ where: { id: solicitudId } });
+  if (!solicitud) throw new AppError('Solicitud no encontrada', 404);
+  if (solicitud.modTarifaEstado !== 'pendiente_revision') {
+    throw new AppError('No hay un ajuste pendiente de revisión', 409);
+  }
+
+  if (decision === 'aprobar') {
+    const actualizada = await prisma.solicitud.update({
+      where: { id: solicitud.id },
+      data: { modTarifaEstado: 'pendiente' },
+    });
+
+    await notificarUsuario(io, solicitud.usuarioId, {
+      tipo: 'mod_tarifa',
+      titulo: 'Cambio de tarifa solicitado ⚠️',
+      cuerpo: `El técnico solicita ajustar la tarifa. Nuevo total estimado: $${Math.round(solicitud.totalFinal).toLocaleString('es-CL')}`,
+      solicitudId: solicitud.id,
+    });
+
+    return { message: 'Aprobado — cliente notificado', solicitud: actualizada };
+  }
+
+  const actualizada = await prisma.solicitud.update({
+    where: { id: solicitud.id },
+    data: { modTarifaEstado: 'rechazada', moModificada: null, totalFinal: null },
+  });
+
+  await notificarTecnico(io, solicitud.tecnicoId, {
+    tipo: 'tarifa_rechazada',
+    titulo: 'Ajuste no aprobado ❌',
+    cuerpo: 'FixYa no validó este ajuste de tarifa. Contacta a soporte si tienes dudas.',
+    solicitudId: solicitud.id,
+  });
+
+  return { message: 'Rechazado — técnico notificado', solicitud: actualizada };
+}
+
+// ─────────────────────────────────────────────
 // Soporte aprueba/rechaza un ajuste de tarifa que
 // superó el 30% — protegido con clave compartida
 // hasta que exista un canal/rol de soporte real.
+// Uso manual/operativo directo (curl, Railway).
 // ─────────────────────────────────────────────
 exports.revisarModTarifa = async (req, res, next) => {
   try {
@@ -473,46 +535,37 @@ exports.revisarModTarifa = async (req, res, next) => {
       throw new AppError('No autorizado', 403);
     }
 
-    const { decision } = req.body; // 'aprobar' | 'rechazar'
-    if (!['aprobar', 'rechazar'].includes(decision)) {
-      throw new AppError('decision debe ser aprobar o rechazar', 422);
+    const resultado = await aplicarDecisionTarifa(req.io, req.params.id, req.body.decision);
+    res.json(resultado);
+  } catch (err) {
+    next(err);
+  }
+};
+
+exports.aplicarDecisionTarifa = aplicarDecisionTarifa;
+
+// ─────────────────────────────────────────────
+// Webhook entrante de la mesa de ayuda externa (hoy Freshdesk,
+// configurado como Automation → Trigger Webhook cuando el operador
+// resuelve el ticket). Protegido con la misma clave compartida que
+// revisarModTarifa. Si el día de mañana se cambia de proveedor o se
+// reemplaza por un panel propio, solo cambia quién llama a este
+// endpoint (o se llama directo a aplicarDecisionTarifa) — la lógica
+// de negocio de arriba no se toca.
+// ─────────────────────────────────────────────
+exports.webhookSoporte = async (req, res, next) => {
+  try {
+    const adminKey = req.headers['x-admin-key'];
+    if (!adminKey || !process.env.ADMIN_KEY || adminKey !== process.env.ADMIN_KEY) {
+      throw new AppError('No autorizado', 403);
     }
 
-    const solicitud = await prisma.solicitud.findUnique({ where: { id: req.params.id } });
-    if (!solicitud) throw new AppError('Solicitud no encontrada', 404);
-    if (solicitud.modTarifaEstado !== 'pendiente_revision') {
-      throw new AppError('No hay un ajuste pendiente de revisión', 409);
-    }
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(422).json({ errors: errors.array() });
 
-    if (decision === 'aprobar') {
-      const actualizada = await prisma.solicitud.update({
-        where: { id: solicitud.id },
-        data: { modTarifaEstado: 'pendiente' },
-      });
-
-      await notificarUsuario(req.io, solicitud.usuarioId, {
-        tipo: 'mod_tarifa',
-        titulo: 'Cambio de tarifa solicitado ⚠️',
-        cuerpo: `El técnico solicita ajustar la tarifa. Nuevo total estimado: $${Math.round(solicitud.totalFinal).toLocaleString('es-CL')}`,
-        solicitudId: solicitud.id,
-      });
-
-      res.json({ message: 'Aprobado — cliente notificado', solicitud: actualizada });
-    } else {
-      const actualizada = await prisma.solicitud.update({
-        where: { id: solicitud.id },
-        data: { modTarifaEstado: 'rechazada', moModificada: null, totalFinal: null },
-      });
-
-      await notificarTecnico(req.io, solicitud.tecnicoId, {
-        tipo: 'tarifa_rechazada',
-        titulo: 'Ajuste no aprobado ❌',
-        cuerpo: 'FixYa no validó este ajuste de tarifa. Contacta a soporte si tienes dudas.',
-        solicitudId: solicitud.id,
-      });
-
-      res.json({ message: 'Rechazado — técnico notificado', solicitud: actualizada });
-    }
+    const { solicitud_id, decision } = req.body;
+    const resultado = await aplicarDecisionTarifa(req.io, solicitud_id, decision);
+    res.json(resultado);
   } catch (err) {
     next(err);
   }

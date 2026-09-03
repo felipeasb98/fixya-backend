@@ -44,6 +44,13 @@ router.post('/:id/revisar-tarifa', [
   body('decision').isIn(['aprobar', 'rechazar']),
 ], ctrl.revisarModTarifa);
 
+// Webhook entrante de la mesa de ayuda externa (hoy: Freshdesk) —
+// protegido con x-admin-key. Ver services/ticketingProvider.js.
+router.post('/webhook/soporte', [
+  body('solicitud_id').notEmpty(),
+  body('decision').isIn(['aprobar', 'rechazar']),
+], ctrl.webhookSoporte);
+
 router.patch('/:id/cancelar', authenticate, [
   body('motivo').trim().notEmpty(),
 ], ctrl.cancelar);
