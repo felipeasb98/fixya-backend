@@ -20,6 +20,8 @@ if (!habilitado) {
 }
 
 // ── Crea el ticket cuando un ajuste de tarifa supera el 30% ──
+// Si el técnico subió foto de respaldo (fotosTrabajo), va adjunta de
+// verdad al ticket — sin eso, quien aprueba no puede ver el problema.
 async function crearTicketAjusteTarifa({ solicitud, tecnico, aumentoPct }) {
   if (!habilitado) return null;
 
@@ -28,32 +30,62 @@ async function crearTicketAjusteTarifa({ solicitud, tecnico, aumentoPct }) {
   const fmt = (n) => '$' + n.toLocaleString('es-CL');
 
   const auth = Buffer.from(`${FRESHDESK_API_KEY}:X`).toString('base64');
-  const body = {
-    subject: `Ajuste de tarifa +${aumentoPct.toFixed(1)}% — ${solicitud.trabajo} (${solicitud.codigo})`,
-    description: [
-      `<b>Técnico:</b> ${tecnico.nombre}`,
-      `<b>Trabajo:</b> ${solicitud.trabajo} (${solicitud.codigo})`,
-      `<b>Tarifa original (M.O.+materiales):</b> ${fmt(original)}`,
-      `<b>Nueva tarifa propuesta:</b> ${fmt(propuesto)}`,
-      `<b>Aumento:</b> +${aumentoPct.toFixed(1)}%`,
-      `<b>Motivo del técnico:</b> ${solicitud.motivoModTarifa || '—'}`,
-      `<b>Solicitud ID (usar para aprobar/rechazar):</b> ${solicitud.id}`,
-    ].join('<br>'),
-    email: process.env.FRESHDESK_REQUESTER_EMAIL || 'sistema@fixya.cl',
-    priority: 2, // alta
-    status: 2,   // abierto
-    tags: ['ajuste-tarifa', 'fixya-automatico'],
-  };
+  const subject = `Ajuste de tarifa +${aumentoPct.toFixed(1)}% — ${solicitud.trabajo} (${solicitud.codigo})`;
+  const description = [
+    `<b>Técnico:</b> ${tecnico.nombre}`,
+    `<b>Trabajo:</b> ${solicitud.trabajo} (${solicitud.codigo})`,
+    `<b>Tarifa original (M.O.+materiales):</b> ${fmt(original)}`,
+    `<b>Nueva tarifa propuesta:</b> ${fmt(propuesto)}`,
+    `<b>Aumento:</b> +${aumentoPct.toFixed(1)}%`,
+    `<b>Motivo del técnico:</b> ${solicitud.motivoModTarifa || '—'}`,
+    `<b>Solicitud ID (usar para aprobar/rechazar):</b> ${solicitud.id}`,
+  ].join('<br>');
+  const email = process.env.FRESHDESK_REQUESTER_EMAIL || 'sistema@fixya.cl';
+
+  // La foto de respaldo llega como data URL base64 en fotosTrabajo
+  // (la última subida corresponde a esta solicitud de ajuste).
+  const fotoDataUrl = Array.isArray(solicitud.fotosTrabajo) && solicitud.fotosTrabajo.length
+    ? solicitud.fotosTrabajo[solicitud.fotosTrabajo.length - 1]
+    : null;
 
   try {
-    const res = await fetch(`https://${FRESHDESK_DOMAIN}.freshdesk.com/api/v2/tickets`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Basic ${auth}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(body),
-    });
+    let res;
+
+    if (fotoDataUrl && fotoDataUrl.startsWith('data:')) {
+      const [meta, base64Data] = fotoDataUrl.split(',');
+      const mime = (meta.match(/data:(.*);base64/) || [, 'image/jpeg'])[1];
+      const ext = mime.split('/')[1] || 'jpg';
+
+      const form = new FormData();
+      form.append('subject', subject);
+      form.append('description', description);
+      form.append('email', email);
+      form.append('priority', '2');
+      form.append('status', '2');
+      form.append('tags[]', 'ajuste-tarifa');
+      form.append('tags[]', 'fixya-automatico');
+      form.append('attachments[]', new Blob([Buffer.from(base64Data, 'base64')], { type: mime }), `dificultad.${ext}`);
+
+      res = await fetch(`https://${FRESHDESK_DOMAIN}.freshdesk.com/api/v2/tickets`, {
+        method: 'POST',
+        headers: { Authorization: `Basic ${auth}` }, // sin Content-Type — fetch pone el boundary del multipart solo
+        body: form,
+      });
+    } else {
+      res = await fetch(`https://${FRESHDESK_DOMAIN}.freshdesk.com/api/v2/tickets`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Basic ${auth}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          subject, description, email,
+          priority: 2, status: 2,
+          tags: ['ajuste-tarifa', 'fixya-automatico'],
+        }),
+      });
+    }
+
     const data = await res.json();
     if (!res.ok) {
       console.error('[ticketingProvider] Freshdesk rechazó la creación del ticket:', data);
