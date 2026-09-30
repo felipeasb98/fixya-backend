@@ -40,7 +40,7 @@ router.post('/iniciar', authenticate, soloRol('usuario'), [
     }
 
     const monto       = solicitud.totalFinal || solicitud.totalEstimado;
-    const comisionPct = solicitud.tecnico?.comisionPct || 18;
+    const comisionPct = solicitud.tecnico?.comisionPct || 10;
     const comisionMonto = calcularComision(monto, comisionPct);
     const montoTecnico  = monto - comisionMonto;
 
@@ -133,7 +133,7 @@ router.post('/adicional/iniciar', authenticate, soloRol('usuario'), [
       throw new AppError('No hay monto adicional pendiente de cobrar', 409);
     }
 
-    const comisionPct   = solicitud.tecnico?.comisionPct || 18;
+    const comisionPct   = solicitud.tecnico?.comisionPct || 10;
     const comisionMonto = calcularComision(montoAdicional, comisionPct);
     const montoTecnico  = montoAdicional - comisionMonto;
 

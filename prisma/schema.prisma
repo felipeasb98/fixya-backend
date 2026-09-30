@@ -46,7 +46,7 @@ model Tecnico {
   secVerificado       Boolean   @default(false)
   activo              Boolean   @default(false)
   disponible          Boolean   @default(false)
-  comisionPct         Float     @default(18.0)
+  comisionPct         Float     @default(10.0)
   plan                String    @default("normal")
   ratingPromedio      Float     @default(0)
   totalRatings        Int       @default(0)
