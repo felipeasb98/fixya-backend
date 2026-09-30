@@ -370,6 +370,25 @@ exports.trabajoTerminado = async (req, res, next) => {
 };
 
 // ─────────────────────────────────────────────
+// Técnico: guardar fotos de cierre (subidas después de trabajo-terminado)
+// ─────────────────────────────────────────────
+exports.actualizarFotosCierre = async (req, res, next) => {
+  try {
+    const { fotosCierre } = req.body;
+    const solicitud = await getSolicitudTecnico(req.params.id, req.user.id);
+
+    const actualizada = await prisma.solicitud.update({
+      where: { id: solicitud.id },
+      data: { fotosCierre: Array.isArray(fotosCierre) ? fotosCierre : [] },
+    });
+
+    res.json({ message: 'Fotos de cierre guardadas', solicitud: actualizada });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─────────────────────────────────────────────
 // Cliente: confirmar trabajo completado
 // ─────────────────────────────────────────────
 exports.confirmarTrabajo = async (req, res, next) => {

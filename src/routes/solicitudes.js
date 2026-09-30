@@ -23,6 +23,7 @@ router.post('/:id/elegir-tecnico', authenticate, soloRol('usuario'), [
 router.patch('/:id/en-camino', authenticate, soloRol('tecnico'), ctrl.enCamino);
 router.patch('/:id/inicio-trabajo', authenticate, soloRol('tecnico'), ctrl.inicioTrabajo);
 router.patch('/:id/trabajo-terminado', authenticate, soloRol('tecnico'), ctrl.trabajoTerminado);
+router.patch('/:id/fotos-cierre', authenticate, soloRol('tecnico'), ctrl.actualizarFotosCierre);
 router.patch('/:id/confirmar', authenticate, soloRol('usuario'), ctrl.confirmarTrabajo);
 
 router.patch('/:id/confirmar-materiales', authenticate, soloRol('usuario'), ctrl.confirmarMateriales);
