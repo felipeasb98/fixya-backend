@@ -37,6 +37,8 @@ async function notificarTecnicos(io, solicitud) {
     direccion: solicitud.direccion,
     totalEstimado: solicitud.totalEstimado,
     moBase: solicitud.moBase,
+    matEstimado: solicitud.matEstimado,
+    rubro: solicitud.rubro?.nombre || '',
     latitud: solicitud.latitud,
     longitud: solicitud.longitud,
     descripcion: solicitud.descripcion || '',

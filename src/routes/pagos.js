@@ -328,14 +328,34 @@ router.get('/historial', authenticate, async (req, res, next) => {
       orderBy: { createdAt: 'desc' },
       take: 50,
       include: {
-        solicitud: { select: { codigo: true, trabajo: true, createdAt: true } },
+        solicitud: { select: { codigo: true, trabajo: true, comuna: true, createdAt: true, clienteConfirmoAt: true } },
       },
     });
 
+    // El técnico solo debe ver su monto neto (montoTecnico), nunca lo que
+    // se le cobró al cliente (monto) — mismo criterio que en el frontend.
+    const montoDe = (p) => (rol === 'tecnico' ? p.montoTecnico : p.monto);
+
+    const ahora = new Date();
+    const inicioHoy = new Date(ahora.getFullYear(), ahora.getMonth(), ahora.getDate());
+    const diaSemana = inicioHoy.getDay(); // 0 = domingo
+    const inicioSemana = new Date(inicioHoy);
+    inicioSemana.setDate(inicioHoy.getDate() - (diaSemana === 0 ? 6 : diaSemana - 1));
+
+    const confirmadoDesde = (fecha) => pagos.filter(p =>
+      p.solicitud?.clienteConfirmoAt && new Date(p.solicitud.clienteConfirmoAt) >= fecha
+    );
+    const confirmadosHoy = confirmadoDesde(inicioHoy);
+    const confirmadosSemana = confirmadoDesde(inicioSemana);
+    const pendientes = pagos.filter(p => p.estado === 'EN_ESCROW');
     const liberados = pagos.filter(p => p.estado === 'LIBERADO');
+
     const resumen = {
-      totalGanado:    liberados.reduce((s, p) => s + (rol === 'tecnico' ? p.montoTecnico : p.monto), 0),
-      totalPendiente: pagos.filter(p => p.estado === 'EN_ESCROW').reduce((s, p) => s + p.monto, 0),
+      totalGanado:    liberados.reduce((s, p) => s + montoDe(p), 0),
+      hoy:            { count: confirmadosHoy.length, monto: confirmadosHoy.reduce((s, p) => s + montoDe(p), 0) },
+      semana:         { monto: confirmadosSemana.reduce((s, p) => s + montoDe(p), 0) },
+      pendientes:     { count: pendientes.length, monto: pendientes.reduce((s, p) => s + montoDe(p), 0) },
+      totalPendiente: pendientes.reduce((s, p) => s + montoDe(p), 0),
     };
 
     res.json({ pagos, resumen });
