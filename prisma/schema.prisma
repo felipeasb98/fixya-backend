@@ -129,6 +129,9 @@ model Solicitud {
   motivoModTarifa       String?
   modTarifaEstado       String?
   ticketSoporteId       String?
+  tarifaDecididoPorId     String?
+  tarifaDecididoPorNombre String?
+  tarifaDecididoAt        DateTime?
   createdAt             DateTime        @default(now())
   updatedAt             DateTime        @updatedAt
 
@@ -226,4 +229,17 @@ model Notificacion {
   createdAt   DateTime @default(now())
 
   @@map("notificaciones")
+}
+
+model Soporte {
+  id           String   @id @default(uuid())
+  nombre       String
+  email        String   @unique
+  passwordHash String
+  esAdmin      Boolean  @default(false)
+  activo       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("soporte")
 }

@@ -499,7 +499,7 @@ exports.solicitarModTarifa = async (req, res, next) => {
 // es el único punto donde vive esta lógica de negocio,
 // para que cambiar de proveedor no la duplique ni la rompa.
 // ─────────────────────────────────────────────
-async function aplicarDecisionTarifa(io, solicitudId, decision) {
+async function aplicarDecisionTarifa(io, solicitudId, decision, decididoPor = null) {
   if (!['aprobar', 'rechazar'].includes(decision)) {
     throw new AppError('decision debe ser aprobar o rechazar', 422);
   }
@@ -510,10 +510,16 @@ async function aplicarDecisionTarifa(io, solicitudId, decision) {
     throw new AppError('No hay un ajuste pendiente de revisión', 409);
   }
 
+  const auditoria = decididoPor ? {
+    tarifaDecididoPorId: decididoPor.id,
+    tarifaDecididoPorNombre: decididoPor.nombre,
+    tarifaDecididoAt: new Date(),
+  } : {};
+
   if (decision === 'aprobar') {
     const actualizada = await prisma.solicitud.update({
       where: { id: solicitud.id },
-      data: { modTarifaEstado: 'pendiente' },
+      data: { modTarifaEstado: 'pendiente', ...auditoria },
     });
 
     await notificarUsuario(io, solicitud.usuarioId, {
@@ -528,7 +534,7 @@ async function aplicarDecisionTarifa(io, solicitudId, decision) {
 
   const actualizada = await prisma.solicitud.update({
     where: { id: solicitud.id },
-    data: { modTarifaEstado: 'rechazada', moModificada: null, totalFinal: null },
+    data: { modTarifaEstado: 'rechazada', moModificada: null, totalFinal: null, ...auditoria },
   });
 
   await notificarTecnico(io, solicitud.tecnicoId, {

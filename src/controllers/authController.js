@@ -94,8 +94,8 @@ exports.refresh = async (req, res, next) => {
   try {
     const { refreshToken } = req.body;
     if (!refreshToken) throw new AppError('Refresh token requerido', 400);
-    const payload = verifyRefreshToken(refreshToken);
-    const tokens = generateTokens({ id: payload.id, rol: payload.rol });
+    const { iat, exp, ...rest } = verifyRefreshToken(refreshToken);
+    const tokens = generateTokens(rest);
     res.json(tokens);
   } catch (err) { next(new AppError('Refresh token invalido o expirado', 401)); }
 };

@@ -21,6 +21,7 @@ const ratingsRoutes = require('./routes/ratings');
 const notificacionesRoutes = require('./routes/notificaciones');
 const uploadRoutes = require('./routes/upload');
 const rubrosRoutes = require('./routes/rubros');
+const soporteRoutes = require('./routes/soporte');
 
 const app = express();
 const server = http.createServer(app);
@@ -42,6 +43,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use((req, _res, next) => { req.io = io; next(); });
 
 app.use('/api/auth', rateLimiter({ max: 10, windowMs: 15 * 60 * 1000 }));
+app.use('/api/soporte/login', rateLimiter({ max: 10, windowMs: 15 * 60 * 1000 }));
 app.use('/api', rateLimiter({ max: 200, windowMs: 15 * 60 * 1000 }));
 
 app.use('/api/auth', authRoutes);
@@ -54,6 +56,7 @@ app.use('/api/ratings', ratingsRoutes);
 app.use('/api/notificaciones', notificacionesRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/rubros', rubrosRoutes); // público — sin autenticación
+app.use('/api/soporte', soporteRoutes);
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', env: process.env.NODE_ENV, timestamp: new Date().toISOString() });
