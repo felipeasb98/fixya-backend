@@ -570,6 +570,60 @@ exports.revisarModTarifa = async (req, res, next) => {
 exports.aplicarDecisionTarifa = aplicarDecisionTarifa;
 
 // ─────────────────────────────────────────────
+// Debug — crea una solicitud de prueba ya con un ajuste
+// de tarifa en modTarifaEstado 'pendiente_revision', para
+// probar el panel de soporte sin pasar por todo el flujo
+// cliente→técnico→pago→en_trabajo. Protegido con ADMIN_KEY,
+// mismo patrón que revisarModTarifa/_debug_flow.
+// ─────────────────────────────────────────────
+exports.debugCrearCasoModTarifa = async (req, res, next) => {
+  try {
+    const adminKey = req.headers['x-admin-key'];
+    if (!adminKey || !process.env.ADMIN_KEY || adminKey !== process.env.ADMIN_KEY) {
+      throw new AppError('No autorizado', 403);
+    }
+
+    const usuario = await prisma.usuario.findUnique({ where: { email: 'felipe.salazar.b98@gmail.com' } });
+    const tecnico = await prisma.tecnico.findUnique({ where: { email: 'tecnico@fixya.cl' } });
+    const rubro = await prisma.rubro.findUnique({ where: { nombre: 'gasfiteria' } });
+    if (!usuario || !tecnico || !rubro) throw new AppError('Faltan datos de prueba (usuario/técnico/rubro)', 500);
+
+    const moBase = 25000;
+    const matEstimado = 5000;
+    const moModificada = 45000; // +50% sobre moBase+matEstimado → dispara pendiente_revision
+    const nuevaComision = (moModificada * tecnico.comisionPct) / 100;
+    const totalFinal = moModificada + matEstimado + nuevaComision;
+
+    const solicitud = await prisma.solicitud.create({
+      data: {
+        codigo: generarCodigo(),
+        usuarioId: usuario.id,
+        rubroId: rubro.id,
+        tecnicoId: tecnico.id,
+        trabajo: '[PRUEBA] Reparación con ajuste de tarifa',
+        descripcion: 'Solicitud de prueba generada para verificar el panel de soporte.',
+        urgencia: 'normal',
+        moBase,
+        matEstimado,
+        totalEstimado: moBase + matEstimado,
+        direccion: 'Av. Apoquindo 3000, Las Condes',
+        comuna: 'Las Condes',
+        estado: 'EN_TRABAJO',
+        tecnicoAceptoAt: new Date(),
+        tecnicoEnCaminoAt: new Date(),
+        trabajoInicioAt: new Date(),
+        moModificada,
+        motivoModTarifa: '[PRUEBA] Se encontró una cañería adicional en mal estado.',
+        modTarifaEstado: 'pendiente_revision',
+        totalFinal,
+      },
+    });
+
+    res.status(201).json({ message: 'Caso de prueba creado', solicitud });
+  } catch (err) { next(err); }
+};
+
+// ─────────────────────────────────────────────
 // Webhook entrante de la mesa de ayuda externa (hoy Freshdesk,
 // configurado como Automation → Trigger Webhook cuando el operador
 // resuelve el ticket). Protegido con la misma clave compartida que
