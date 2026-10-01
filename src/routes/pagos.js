@@ -328,7 +328,7 @@ router.get('/historial', authenticate, async (req, res, next) => {
       orderBy: { createdAt: 'desc' },
       take: 50,
       include: {
-        solicitud: { select: { codigo: true, trabajo: true, comuna: true, createdAt: true, clienteConfirmoAt: true } },
+        solicitud: { select: { id: true, codigo: true, trabajo: true, comuna: true, createdAt: true, clienteConfirmoAt: true, disputaEstado: true } },
       },
     });
 
