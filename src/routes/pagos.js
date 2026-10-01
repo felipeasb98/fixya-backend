@@ -8,7 +8,7 @@ const { soloRol } = require('../middlewares/soloRol');
 const { AppError } = require('../utils/AppError');
 const { calcularComision } = require('../utils/helpers');
 const { notificarTecnico } = require('../services/notificacionService');
-const { crearPago, confirmarPago } = require('../services/flowService');
+const { crearPago, confirmarPago, reembolsar } = require('../services/flowService');
 
 // ─────────────────────────────────────────────────────────────
 // POST /api/pagos/iniciar
@@ -381,6 +381,23 @@ router.get('/_debug_flow', (req, res) => {
     },
     env: process.env.FLOW_ENV,
   });
+});
+
+// Debug — llama a reembolsar() directo y devuelve la respuesta cruda de Flow,
+// para diagnosticar un 502 sin adivinar. Protegido con ADMIN_KEY.
+router.post('/_debug_reembolso', async (req, res, next) => {
+  try {
+    const adminKey = req.headers['x-admin-key'];
+    if (!adminKey || !process.env.ADMIN_KEY || adminKey !== process.env.ADMIN_KEY) {
+      throw new AppError('No autorizado', 403);
+    }
+    const { pagoId, amount } = req.body;
+    const pago = await prisma.pago.findUnique({ where: { id: pagoId } });
+    if (!pago) throw new AppError('Pago no encontrado', 404);
+
+    const resultado = await reembolsar({ token: pago.proveedorId, amount: amount || pago.monto, reason: 'Debug reembolso' });
+    res.json({ proveedorId: pago.proveedorId, montoPago: pago.monto, resultado });
+  } catch (err) { next(err); }
 });
 
 module.exports = router;
