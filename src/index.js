@@ -26,6 +26,11 @@ const soporteRoutes = require('./routes/soporte');
 const app = express();
 const server = http.createServer(app);
 
+// Railway corre detrás de un proxy — sin esto, Express lee el IP del
+// proxy en vez del cliente real, y el rate limiting por IP de abajo
+// termina agrupando a todos los usuarios en un solo contador.
+app.set('trust proxy', 1);
+
 // Quitar slash final de FRONTEND_URL — un valor con "/" al final rompe
 // la comparación exacta de origen que exige CORS (ya pasó dos veces).
 const FRONTEND_ORIGIN = (process.env.FRONTEND_URL || '*').replace(/\/+$/, '');
@@ -44,6 +49,7 @@ app.use((req, _res, next) => { req.io = io; next(); });
 
 app.use('/api/auth', rateLimiter({ max: 10, windowMs: 15 * 60 * 1000 }));
 app.use('/api/soporte/login', rateLimiter({ max: 10, windowMs: 15 * 60 * 1000 }));
+app.use('/api/pagos/iniciar', rateLimiter({ max: 15, windowMs: 15 * 60 * 1000 }));
 app.use('/api', rateLimiter({ max: 200, windowMs: 15 * 60 * 1000 }));
 
 app.use('/api/auth', authRoutes);
