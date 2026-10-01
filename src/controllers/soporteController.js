@@ -187,6 +187,7 @@ exports.listarDisputas = async (req, res, next) => {
         usuario: { select: { nombre: true } },
         tecnico: { select: { nombre: true, comisionPct: true } },
         rubro: { select: { nombre: true, emoji: true } },
+        pagos: true,
       },
     });
 
