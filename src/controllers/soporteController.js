@@ -4,7 +4,7 @@ const { validationResult } = require('express-validator');
 
 const { generateTokens } = require('../utils/jwt');
 const { AppError } = require('../utils/AppError');
-const { aplicarDecisionTarifa } = require('./solicitudesController');
+const { aplicarDecisionTarifa, aplicarResolucionDisputa } = require('./solicitudesController');
 
 // ─────────────────────────────────────────────
 // Bootstrap — crea la primera cuenta admin (chicken/egg:
@@ -120,7 +120,7 @@ exports.listarTarifas = async (req, res, next) => {
     if (estado === 'pendiente_revision') {
       where.modTarifaEstado = 'pendiente_revision';
       // Un agente (no admin) solo ve los casos asignados a él.
-      if (!req.user.esAdmin) where.asignadoAId = req.user.id;
+      if (!req.user.esAdmin) where.tarifaAsignadoAId = req.user.id;
     } else if (estado === 'resueltos') {
       where.modTarifaEstado = { in: ['pendiente', 'rechazada'] };
       where.tarifaDecididoAt = { not: null };
@@ -149,15 +149,67 @@ exports.decidirTarifa = async (req, res, next) => {
     if (!errors.isEmpty()) return res.status(422).json({ errors: errors.array() });
 
     if (!req.user.esAdmin) {
-      const solicitud = await prisma.solicitud.findUnique({ where: { id: req.params.id }, select: { asignadoAId: true } });
+      const solicitud = await prisma.solicitud.findUnique({ where: { id: req.params.id }, select: { tarifaAsignadoAId: true } });
       if (!solicitud) throw new AppError('Solicitud no encontrada', 404);
-      if (solicitud.asignadoAId !== req.user.id) throw new AppError('Este caso está asignado a otro agente', 403);
+      if (solicitud.tarifaAsignadoAId !== req.user.id) throw new AppError('Este caso está asignado a otro agente', 403);
     }
 
     const resultado = await aplicarDecisionTarifa(
       req.io,
       req.params.id,
       req.body.decision,
+      { id: req.user.id, nombre: req.user.nombre },
+    );
+    res.json(resultado);
+  } catch (err) { next(err); }
+};
+
+// ─────────────────────────────────────────────
+// Disputas (trabajo mal ejecutado) — cola abierta + resueltas
+// ─────────────────────────────────────────────
+exports.listarDisputas = async (req, res, next) => {
+  try {
+    const { estado } = req.query; // 'abierta' | 'resueltas' | undefined (todas)
+    const where = {};
+    if (estado === 'abierta') {
+      where.disputaEstado = 'abierta';
+      if (!req.user.esAdmin) where.disputaAsignadoAId = req.user.id;
+    } else if (estado === 'resueltas') {
+      where.disputaEstado = 'resuelta';
+      if (!req.user.esAdmin) where.disputaDecididoPorId = req.user.id;
+    }
+
+    const solicitudes = await prisma.solicitud.findMany({
+      where: { ...where, disputaMotivo: { not: null } },
+      orderBy: { updatedAt: 'desc' },
+      take: 100,
+      include: {
+        usuario: { select: { nombre: true } },
+        tecnico: { select: { nombre: true, comisionPct: true } },
+        rubro: { select: { nombre: true, emoji: true } },
+      },
+    });
+
+    res.json({ solicitudes });
+  } catch (err) { next(err); }
+};
+
+exports.resolverDisputa = async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(422).json({ errors: errors.array() });
+
+    if (!req.user.esAdmin) {
+      const solicitud = await prisma.solicitud.findUnique({ where: { id: req.params.id }, select: { disputaAsignadoAId: true } });
+      if (!solicitud) throw new AppError('Solicitud no encontrada', 404);
+      if (solicitud.disputaAsignadoAId !== req.user.id) throw new AppError('Este caso está asignado a otro agente', 403);
+    }
+
+    const resultado = await aplicarResolucionDisputa(
+      req.io,
+      req.params.id,
+      req.body.resolucion,
+      req.body.montoReembolso ? parseFloat(req.body.montoReembolso) : null,
       { id: req.user.id, nombre: req.user.nombre },
     );
     res.json(resultado);
@@ -246,15 +298,16 @@ exports.dashboard = async (_req, res, next) => {
   try {
     const [
       solicitudesActivas, tecnicosActivos, usuariosTotal,
-      tarifasPendientes, pagosEnEscrow,
+      tarifasPendientes, disputasPendientes, pagosEnEscrow,
     ] = await Promise.all([
       prisma.solicitud.count({ where: { estado: { notIn: ['COMPLETADO', 'CANCELADO'] } } }),
       prisma.tecnico.count({ where: { activo: true } }),
       prisma.usuario.count(),
       prisma.solicitud.count({ where: { modTarifaEstado: 'pendiente_revision' } }),
+      prisma.solicitud.count({ where: { disputaEstado: 'abierta' } }),
       prisma.pago.count({ where: { estado: 'EN_ESCROW' } }),
     ]);
 
-    res.json({ solicitudesActivas, tecnicosActivos, usuariosTotal, tarifasPendientes, pagosEnEscrow });
+    res.json({ solicitudesActivas, tecnicosActivos, usuariosTotal, tarifasPendientes, disputasPendientes, pagosEnEscrow });
   } catch (err) { next(err); }
 };

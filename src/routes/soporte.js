@@ -30,6 +30,12 @@ router.patch('/tarifas/:id/decidir', [
   body('decision').isIn(['aprobar', 'rechazar']).withMessage('decision debe ser aprobar o rechazar'),
 ], soporteController.decidirTarifa);
 
+router.get('/disputas', soporteController.listarDisputas);
+router.patch('/disputas/:id/resolver', [
+  body('resolucion').isIn(['liberar', 'reembolso_total', 'reembolso_parcial']).withMessage('resolución inválida'),
+  body('montoReembolso').optional().isFloat({ min: 1 }),
+], soporteController.resolverDisputa);
+
 router.get('/solicitudes', soporteController.listarSolicitudes);
 router.get('/solicitudes/:id', soporteController.obtenerSolicitud);
 

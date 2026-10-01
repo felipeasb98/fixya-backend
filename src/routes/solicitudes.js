@@ -40,6 +40,14 @@ router.patch('/:id/resp-tarifa', authenticate, soloRol('usuario'), [
   body('decision').isIn(['aceptar', 'rechazar']),
 ], ctrl.responderModTarifa);
 
+router.post('/:id/disputar', authenticate, soloRol('usuario'), [
+  body('motivo').trim().notEmpty().withMessage('Motivo requerido'),
+], ctrl.abrirDisputa);
+
+router.post('/:id/disputar/responder', authenticate, soloRol('tecnico'), [
+  body('respuesta').trim().notEmpty().withMessage('Respuesta requerida'),
+], ctrl.responderDisputaTecnico);
+
 // Soporte — protegido con x-admin-key, sin rol/login propio todavía
 router.post('/:id/revisar-tarifa', [
   body('decision').isIn(['aprobar', 'rechazar']),
@@ -48,6 +56,7 @@ router.post('/:id/revisar-tarifa', [
 // Debug — crea un caso de prueba de ajuste de tarifa pendiente de revisión.
 // Protegido con x-admin-key. Ver nota en el controller.
 router.post('/_debug/crear-caso-mod-tarifa', ctrl.debugCrearCasoModTarifa);
+router.post('/_debug/crear-caso-disputa', ctrl.debugCrearCasoDisputa);
 router.delete('/_debug/:id', ctrl.debugEliminarSolicitud);
 
 // Webhook entrante de la mesa de ayuda externa (hoy: Freshdesk) —

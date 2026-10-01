@@ -6,6 +6,7 @@ const { generarCodigo } = require('../utils/helpers');
 const { notificarTecnicos, notificarUsuario, notificarTecnico } = require('../services/notificacionService');
 const { calcularDistanciaKm } = require('../utils/geo');
 const { crearTicketAjusteTarifa } = require('../services/ticketingProvider');
+const { reembolsar } = require('../services/flowService');
 
 
 
@@ -419,6 +420,175 @@ exports.confirmarTrabajo = async (req, res, next) => {
 };
 
 // ─────────────────────────────────────────────
+// Cliente abre una disputa (trabajo mal ejecutado) — en
+// cualquier momento mientras el pago siga retenido en escrow:
+// desde que el técnico marca el trabajo como terminado
+// (ESPERANDO_CONF) hasta que el pago se libera (incluso ya
+// confirmado, dentro de las 48 hrs de espera).
+// ─────────────────────────────────────────────
+exports.abrirDisputa = async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(422).json({ errors: errors.array() });
+
+    const { motivo, fotos } = req.body;
+    const solicitud = await getSolicitudPropia(req.params.id, req.user.id, 'usuario');
+
+    if (!['ESPERANDO_CONF', 'COMPLETADO'].includes(solicitud.estado)) {
+      throw new AppError('Solo puedes reportar un problema mientras el pago está retenido', 409);
+    }
+    if (solicitud.disputaEstado === 'abierta') {
+      throw new AppError('Ya existe una disputa abierta para esta solicitud', 409);
+    }
+
+    const pago = await prisma.pago.findFirst({ where: { solicitudId: solicitud.id, tipo: 'inicial' } });
+    if (!pago || pago.estado !== 'EN_ESCROW') {
+      throw new AppError('El pago de esta solicitud ya no está retenido en escrow', 409);
+    }
+
+    await prisma.solicitud.update({
+      where: { id: solicitud.id },
+      data: {
+        estado: 'DISPUTADO',
+        disputaMotivo: motivo,
+        disputaFotos: fotos || [],
+        disputaEstado: 'abierta',
+        disputaAbiertaAt: new Date(),
+      },
+    });
+
+    const actualizada = await asignarDisputaAutomaticamente(solicitud.id);
+
+    await notificarTecnico(req.io, solicitud.tecnicoId, {
+      tipo: 'disputa_abierta',
+      titulo: 'El cliente reportó un problema ⚠️',
+      cuerpo: 'FixYa está revisando el caso. Puedes dar tu versión de los hechos.',
+      solicitudId: solicitud.id,
+    });
+
+    res.json({ message: 'Disputa abierta. FixYa revisará el caso.', solicitud: actualizada });
+  } catch (err) { next(err); }
+};
+
+// ─────────────────────────────────────────────
+// Técnico responde a una disputa abierta en su contra —
+// opcional, pero queda registrado para que soporte lo vea
+// antes de decidir.
+// ─────────────────────────────────────────────
+exports.responderDisputaTecnico = async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(422).json({ errors: errors.array() });
+
+    const { respuesta, fotos } = req.body;
+    const solicitud = await getSolicitudTecnico(req.params.id, req.user.id);
+
+    if (solicitud.disputaEstado !== 'abierta') {
+      throw new AppError('No hay una disputa abierta para esta solicitud', 409);
+    }
+
+    const actualizada = await prisma.solicitud.update({
+      where: { id: solicitud.id },
+      data: {
+        disputaRespuestaTecnico: respuesta,
+        disputaFotosTecnico: fotos || [],
+      },
+    });
+
+    res.json({ message: 'Respuesta enviada a FixYa', solicitud: actualizada });
+  } catch (err) { next(err); }
+};
+
+// ─────────────────────────────────────────────
+// Lógica compartida: aplicar la resolución de soporte sobre
+// una disputa abierta.
+// ⚠️ Limitación actual: un reembolso parcial o total deja al
+// técnico sin recibir nada de este pago — Flow reembolsa desde
+// la transacción original al cliente, y hoy no existe un
+// mecanismo de payout directo al técnico para cubrir la
+// diferencia (ver backlog "Flow Payouts"). Si se necesita
+// compensarlo parcialmente, debe hacerse manualmente por ahora.
+// ─────────────────────────────────────────────
+async function aplicarResolucionDisputa(io, solicitudId, resolucion, montoReembolso, decididoPor) {
+  if (!['liberar', 'reembolso_total', 'reembolso_parcial'].includes(resolucion)) {
+    throw new AppError('resolucion inválida', 422);
+  }
+
+  const solicitud = await prisma.solicitud.findUnique({ where: { id: solicitudId } });
+  if (!solicitud) throw new AppError('Solicitud no encontrada', 404);
+  if (solicitud.disputaEstado !== 'abierta') throw new AppError('No hay una disputa abierta', 409);
+
+  const pago = await prisma.pago.findFirst({ where: { solicitudId, tipo: 'inicial' } });
+  if (!pago || pago.estado !== 'EN_ESCROW') throw new AppError('El pago ya no está en escrow', 409);
+
+  const auditoria = {
+    disputaEstado: 'resuelta',
+    disputaResolucion: resolucion,
+    disputaDecididoPorId: decididoPor.id,
+    disputaDecididoPorNombre: decididoPor.nombre,
+    disputaDecididoAt: new Date(),
+  };
+
+  if (resolucion === 'liberar') {
+    await prisma.pago.update({ where: { id: pago.id }, data: { estado: 'LIBERADO', liberadoAt: new Date() } });
+    await prisma.tecnico.update({ where: { id: solicitud.tecnicoId }, data: { trabajosCompletados: { increment: 1 } } });
+
+    const actualizada = await prisma.solicitud.update({
+      where: { id: solicitud.id },
+      data: { estado: 'COMPLETADO', clienteConfirmoAt: solicitud.clienteConfirmoAt || new Date(), ...auditoria },
+    });
+
+    await notificarTecnico(io, solicitud.tecnicoId, {
+      tipo: 'disputa_resuelta',
+      titulo: 'Disputa resuelta a tu favor ✅',
+      cuerpo: 'FixYa revisó el caso y tu pago fue liberado.',
+      solicitudId: solicitud.id,
+    });
+    await notificarUsuario(io, solicitud.usuarioId, {
+      tipo: 'disputa_resuelta',
+      titulo: 'Disputa resuelta',
+      cuerpo: 'FixYa revisó tu reporte. El pago fue liberado al técnico.',
+      solicitudId: solicitud.id,
+    });
+
+    return { message: 'Disputa resuelta — pago liberado al técnico', solicitud: actualizada };
+  }
+
+  // reembolso_total | reembolso_parcial
+  const monto = resolucion === 'reembolso_total' ? pago.monto : montoReembolso;
+  if (!monto || monto <= 0 || monto > pago.monto) {
+    throw new AppError('Monto de reembolso inválido', 422);
+  }
+
+  const resultado = await reembolsar({ token: pago.proveedorId, amount: monto, reason: `Disputa FixYa — ${solicitud.codigo}` });
+  if (!resultado.ok) throw new AppError('Error al procesar el reembolso con Flow', 502);
+
+  await prisma.pago.update({ where: { id: pago.id }, data: { estado: 'REEMBOLSADO' } });
+
+  const actualizada = await prisma.solicitud.update({
+    where: { id: solicitud.id },
+    data: { estado: 'COMPLETADO', disputaReembolsoMonto: monto, ...auditoria },
+  });
+
+  await notificarUsuario(io, solicitud.usuarioId, {
+    tipo: 'disputa_resuelta',
+    titulo: 'Disputa resuelta — reembolso procesado 💰',
+    cuerpo: `Se reembolsaron $${Math.round(monto).toLocaleString('es-CL')} a tu medio de pago.`,
+    solicitudId: solicitud.id,
+  });
+  await notificarTecnico(io, solicitud.tecnicoId, {
+    tipo: 'disputa_resuelta',
+    titulo: 'Disputa resuelta a favor del cliente',
+    cuerpo: 'FixYa revisó el caso y se reembolsó al cliente. No recibirás el pago de este trabajo.',
+    solicitudId: solicitud.id,
+  });
+
+  return { message: 'Disputa resuelta — reembolso procesado', solicitud: actualizada };
+}
+
+exports.aplicarResolucionDisputa = aplicarResolucionDisputa;
+
+// ─────────────────────────────────────────────
 // Auto-asignación de casos de ajuste de tarifa: al agente de
 // soporte activo con menos casos pendiente_revision en este
 // momento (empate → cuenta creada primero, para ser determinista).
@@ -428,7 +598,7 @@ async function asignarCasoAutomaticamente(solicitudId) {
   if (!cuentas.length) return null;
 
   const conteos = await Promise.all(cuentas.map(c =>
-    prisma.solicitud.count({ where: { asignadoAId: c.id, modTarifaEstado: 'pendiente_revision' } })
+    prisma.solicitud.count({ where: { tarifaAsignadoAId: c.id, modTarifaEstado: 'pendiente_revision' } })
   ));
 
   let elegido = cuentas[0];
@@ -439,7 +609,31 @@ async function asignarCasoAutomaticamente(solicitudId) {
 
   return prisma.solicitud.update({
     where: { id: solicitudId },
-    data: { asignadoAId: elegido.id, asignadoANombre: elegido.nombre, asignadoAt: new Date() },
+    data: { tarifaAsignadoAId: elegido.id, tarifaAsignadoANombre: elegido.nombre, tarifaAsignadoAt: new Date() },
+  });
+}
+
+// ─────────────────────────────────────────────
+// Misma idea que asignarCasoAutomaticamente, pero para
+// disputas de trabajo mal ejecutado (campos disputaAsignadoA*).
+// ─────────────────────────────────────────────
+async function asignarDisputaAutomaticamente(solicitudId) {
+  const cuentas = await prisma.soporte.findMany({ where: { activo: true }, orderBy: { createdAt: 'asc' } });
+  if (!cuentas.length) return null;
+
+  const conteos = await Promise.all(cuentas.map(c =>
+    prisma.solicitud.count({ where: { disputaAsignadoAId: c.id, disputaEstado: 'abierta' } })
+  ));
+
+  let elegido = cuentas[0];
+  let menorConteo = conteos[0];
+  for (let i = 1; i < cuentas.length; i++) {
+    if (conteos[i] < menorConteo) { elegido = cuentas[i]; menorConteo = conteos[i]; }
+  }
+
+  return prisma.solicitud.update({
+    where: { id: solicitudId },
+    data: { disputaAsignadoAId: elegido.id, disputaAsignadoANombre: elegido.nombre, disputaAsignadoAt: new Date() },
   });
 }
 
@@ -655,6 +849,77 @@ exports.debugCrearCasoModTarifa = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+// Debug — crea una solicitud de prueba con una disputa ya abierta,
+// más su Pago en escrow (con un proveedorId ficticio — sirve para
+// probar la resolución 'liberar', pero NO los reembolsos reales,
+// que requieren un token de Flow genuino de un pago real). Protegido
+// con ADMIN_KEY, mismo patrón que debugCrearCasoModTarifa.
+exports.debugCrearCasoDisputa = async (req, res, next) => {
+  try {
+    const adminKey = req.headers['x-admin-key'];
+    if (!adminKey || !process.env.ADMIN_KEY || adminKey !== process.env.ADMIN_KEY) {
+      throw new AppError('No autorizado', 403);
+    }
+
+    const usuario = await prisma.usuario.findUnique({ where: { email: 'felipe.salazar.b98@gmail.com' } });
+    const tecnico = await prisma.tecnico.findUnique({ where: { email: 'tecnico@fixya.cl' } });
+    const rubro = await prisma.rubro.findUnique({ where: { nombre: 'gasfiteria' } });
+    if (!usuario || !tecnico || !rubro) throw new AppError('Faltan datos de prueba (usuario/técnico/rubro)', 500);
+
+    const moBase = 25000;
+    const matEstimado = 5000;
+    const comisionMonto = (moBase * tecnico.comisionPct) / 100;
+    const monto = moBase + matEstimado + comisionMonto;
+
+    const solicitud = await prisma.solicitud.create({
+      data: {
+        codigo: generarCodigo(),
+        usuarioId: usuario.id,
+        rubroId: rubro.id,
+        tecnicoId: tecnico.id,
+        trabajo: '[PRUEBA] Reparación con disputa',
+        descripcion: 'Solicitud de prueba generada para verificar el panel de soporte.',
+        urgencia: 'normal',
+        moBase,
+        matEstimado,
+        totalEstimado: moBase + matEstimado,
+        totalFinal: moBase + matEstimado,
+        direccion: 'Av. Apoquindo 3000, Las Condes',
+        comuna: 'Las Condes',
+        estado: 'DISPUTADO',
+        tecnicoAceptoAt: new Date(),
+        tecnicoEnCaminoAt: new Date(),
+        trabajoInicioAt: new Date(),
+        trabajoFinAt: new Date(),
+        disputaMotivo: '[PRUEBA] El técnico dejó una fuga activa después de la reparación.',
+        disputaFotos: [],
+        disputaEstado: 'abierta',
+        disputaAbiertaAt: new Date(),
+      },
+    });
+
+    await prisma.pago.create({
+      data: {
+        solicitudId: solicitud.id,
+        tecnicoId: tecnico.id,
+        monto,
+        comisionPct: tecnico.comisionPct,
+        comisionMonto,
+        montoTecnico: monto - comisionMonto,
+        metodo: 'flow',
+        tipo: 'inicial',
+        estado: 'EN_ESCROW',
+        proveedorId: 'TEST-TOKEN-NO-VALIDO',
+        escrowAt: new Date(),
+      },
+    });
+
+    const asignada = await asignarDisputaAutomaticamente(solicitud.id);
+
+    res.status(201).json({ message: 'Caso de prueba creado', solicitud: asignada || solicitud });
+  } catch (err) { next(err); }
+};
+
 // Debug — borra una solicitud de prueba creada por el endpoint de
 // arriba (o cualquier otra, con cuidado). Protegido con ADMIN_KEY.
 exports.debugEliminarSolicitud = async (req, res, next) => {
@@ -670,6 +935,7 @@ exports.debugEliminarSolicitud = async (req, res, next) => {
       throw new AppError('Solo se pueden borrar solicitudes marcadas [PRUEBA] por este endpoint', 409);
     }
 
+    await prisma.pago.deleteMany({ where: { solicitudId: req.params.id } });
     await prisma.solicitud.delete({ where: { id: req.params.id } });
     res.json({ message: 'Solicitud de prueba eliminada', id: req.params.id });
   } catch (err) { next(err); }
