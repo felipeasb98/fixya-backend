@@ -419,6 +419,31 @@ exports.confirmarTrabajo = async (req, res, next) => {
 };
 
 // ─────────────────────────────────────────────
+// Auto-asignación de casos de ajuste de tarifa: al agente de
+// soporte activo con menos casos pendiente_revision en este
+// momento (empate → cuenta creada primero, para ser determinista).
+// ─────────────────────────────────────────────
+async function asignarCasoAutomaticamente(solicitudId) {
+  const cuentas = await prisma.soporte.findMany({ where: { activo: true }, orderBy: { createdAt: 'asc' } });
+  if (!cuentas.length) return null;
+
+  const conteos = await Promise.all(cuentas.map(c =>
+    prisma.solicitud.count({ where: { asignadoAId: c.id, modTarifaEstado: 'pendiente_revision' } })
+  ));
+
+  let elegido = cuentas[0];
+  let menorConteo = conteos[0];
+  for (let i = 1; i < cuentas.length; i++) {
+    if (conteos[i] < menorConteo) { elegido = cuentas[i]; menorConteo = conteos[i]; }
+  }
+
+  return prisma.solicitud.update({
+    where: { id: solicitudId },
+    data: { asignadoAId: elegido.id, asignadoANombre: elegido.nombre, asignadoAt: new Date() },
+  });
+}
+
+// ─────────────────────────────────────────────
 // Técnico solicita modificación de tarifa
 // ─────────────────────────────────────────────
 exports.solicitarModTarifa = async (req, res, next) => {
@@ -457,6 +482,11 @@ exports.solicitarModTarifa = async (req, res, next) => {
     });
 
     if (requiereRevision) {
+      // Auto-asignar al agente de soporte con menos casos activos
+      // ahora mismo (empate → el de cuenta más antigua).
+      const asignada = await asignarCasoAutomaticamente(solicitud.id);
+      if (asignada) actualizada = asignada;
+
       // No se notifica al cliente todavía — queda bloqueado hasta que
       // soporte lo apruebe. Se crea un ticket en la mesa de ayuda externa
       // (ver services/ticketingProvider.js); si no está configurada
@@ -619,7 +649,9 @@ exports.debugCrearCasoModTarifa = async (req, res, next) => {
       },
     });
 
-    res.status(201).json({ message: 'Caso de prueba creado', solicitud });
+    const asignada = await asignarCasoAutomaticamente(solicitud.id);
+
+    res.status(201).json({ message: 'Caso de prueba creado', solicitud: asignada || solicitud });
   } catch (err) { next(err); }
 };
 

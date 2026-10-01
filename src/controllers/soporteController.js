@@ -119,6 +119,8 @@ exports.listarTarifas = async (req, res, next) => {
     const where = {};
     if (estado === 'pendiente_revision') {
       where.modTarifaEstado = 'pendiente_revision';
+      // Un agente (no admin) solo ve los casos asignados a él.
+      if (!req.user.esAdmin) where.asignadoAId = req.user.id;
     } else if (estado === 'resueltos') {
       where.modTarifaEstado = { in: ['pendiente', 'rechazada'] };
       where.tarifaDecididoAt = { not: null };
@@ -145,6 +147,12 @@ exports.decidirTarifa = async (req, res, next) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(422).json({ errors: errors.array() });
+
+    if (!req.user.esAdmin) {
+      const solicitud = await prisma.solicitud.findUnique({ where: { id: req.params.id }, select: { asignadoAId: true } });
+      if (!solicitud) throw new AppError('Solicitud no encontrada', 404);
+      if (solicitud.asignadoAId !== req.user.id) throw new AppError('Este caso está asignado a otro agente', 403);
+    }
 
     const resultado = await aplicarDecisionTarifa(
       req.io,

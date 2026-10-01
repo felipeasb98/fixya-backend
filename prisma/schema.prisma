@@ -132,6 +132,9 @@ model Solicitud {
   tarifaDecididoPorId     String?
   tarifaDecididoPorNombre String?
   tarifaDecididoAt        DateTime?
+  asignadoAId             String?
+  asignadoANombre         String?
+  asignadoAt              DateTime?
   createdAt             DateTime        @default(now())
   updatedAt             DateTime        @updatedAt
 
