@@ -132,9 +132,9 @@ model Solicitud {
   tarifaDecididoPorId     String?
   tarifaDecididoPorNombre String?
   tarifaDecididoAt        DateTime?
-  tarifaAsignadoAId       String?
-  tarifaAsignadoANombre   String?
-  tarifaAsignadoAt        DateTime?
+  asignadoAId             String?
+  asignadoANombre         String?
+  asignadoAt              DateTime?
   disputaMotivo           String?
   disputaFotos            String[]
   disputaRespuestaTecnico String?

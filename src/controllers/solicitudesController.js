@@ -598,7 +598,7 @@ async function asignarCasoAutomaticamente(solicitudId) {
   if (!cuentas.length) return null;
 
   const conteos = await Promise.all(cuentas.map(c =>
-    prisma.solicitud.count({ where: { tarifaAsignadoAId: c.id, modTarifaEstado: 'pendiente_revision' } })
+    prisma.solicitud.count({ where: { asignadoAId: c.id, modTarifaEstado: 'pendiente_revision' } })
   ));
 
   let elegido = cuentas[0];
@@ -609,7 +609,7 @@ async function asignarCasoAutomaticamente(solicitudId) {
 
   return prisma.solicitud.update({
     where: { id: solicitudId },
-    data: { tarifaAsignadoAId: elegido.id, tarifaAsignadoANombre: elegido.nombre, tarifaAsignadoAt: new Date() },
+    data: { asignadoAId: elegido.id, asignadoANombre: elegido.nombre, asignadoAt: new Date() },
   });
 }
 
