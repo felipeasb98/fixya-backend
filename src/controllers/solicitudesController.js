@@ -514,7 +514,7 @@ async function aplicarResolucionDisputa(io, solicitudId, resolucion, montoReembo
     throw new AppError('resolucion inválida', 422);
   }
 
-  const solicitud = await prisma.solicitud.findUnique({ where: { id: solicitudId } });
+  const solicitud = await prisma.solicitud.findUnique({ where: { id: solicitudId }, include: { usuario: true } });
   if (!solicitud) throw new AppError('Solicitud no encontrada', 404);
   if (solicitud.disputaEstado !== 'abierta') throw new AppError('No hay una disputa abierta', 409);
 
@@ -560,7 +560,13 @@ async function aplicarResolucionDisputa(io, solicitudId, resolucion, montoReembo
     throw new AppError('Monto de reembolso inválido', 422);
   }
 
-  const resultado = await reembolsar({ token: pago.proveedorId, amount: monto, reason: `Disputa FixYa — ${solicitud.codigo}` });
+  const baseUrl = process.env.BACKEND_URL || 'https://fixya-backend-production.up.railway.app';
+  const resultado = await reembolsar({
+    commerceTrxId: pago.id,
+    amount: monto,
+    receiverEmail: solicitud.usuario.email,
+    urlCallBack: `${baseUrl}/api/pagos/webhook/flow-refund`,
+  });
   if (!resultado.ok) throw new AppError('Error al procesar el reembolso con Flow', 502);
 
   await prisma.pago.update({ where: { id: pago.id }, data: { estado: 'REEMBOLSADO' } });

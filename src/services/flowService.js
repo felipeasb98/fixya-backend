@@ -79,14 +79,23 @@ async function confirmarPago(token) {
 }
 
 // ── Reembolso ─────────────────────────────────────────────────
-async function reembolsar({ token, amount, reason }) {
+// Nota: refund/create es asíncrono — un code:0 aquí solo confirma que
+// Flow creó la orden de reembolso, no que el dinero ya se devolvió.
+// El estado final llega vía urlCallBack (ver /pagos/webhook/flow-refund).
+// Por ahora tratamos la creación exitosa de la orden como suficiente
+// para marcar el pago REEMBOLSADO — mismo criterio pragmático que ya
+// se usa con el pago original (confirmarPago también se trata como
+// definitivo en el webhook, sin un segundo paso de reconciliación).
+async function reembolsar({ commerceTrxId, amount, receiverEmail, urlCallBack }) {
   const { apiKey, secretKey } = getKeys();
 
   const params = {
     apiKey,
-    token,
+    refundCommerceOrder: `refund-${commerceTrxId}-${Date.now()}`,
+    receiverEmail,
     amount: Math.round(amount),
-    reason: reason || 'Reembolso FixYa',
+    urlCallBack,
+    commerceTrxId,
   };
   params.s = firmar(params, secretKey);
 
@@ -98,7 +107,7 @@ async function reembolsar({ token, amount, reason }) {
   });
 
   const data = await res.json();
-  return { ok: data.code === 0, data };
+  return { ok: res.ok && !data.code, data };
 }
 
 module.exports = { crearPago, confirmarPago, reembolsar };

@@ -235,6 +235,19 @@ router.post('/webhook/flow', async (req, res, next) => {
 });
 
 // ─────────────────────────────────────────────────────────────
+// POST /api/pagos/webhook/flow-refund
+// Flow llama aquí cuando cambia el estado de una orden de reembolso.
+// Por ahora solo se registra — aplicarResolucionDisputa() ya trata la
+// creación exitosa de la orden (refund/create) como definitiva y marca
+// el Pago como REEMBOLSADO de inmediato, mismo criterio pragmático que
+// se usa con el webhook de pago original.
+// ─────────────────────────────────────────────────────────────
+router.post('/webhook/flow-refund', async (req, res) => {
+  console.log('[webhook/flow-refund]', req.body);
+  res.json({ ok: true });
+});
+
+// ─────────────────────────────────────────────────────────────
 // GET /api/pagos/retorno
 // URL de retorno después del pago (Flow redirige aquí)
 // ─────────────────────────────────────────────────────────────
