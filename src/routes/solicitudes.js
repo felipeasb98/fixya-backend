@@ -48,6 +48,7 @@ router.post('/:id/revisar-tarifa', [
 // Debug — crea un caso de prueba de ajuste de tarifa pendiente de revisión.
 // Protegido con x-admin-key. Ver nota en el controller.
 router.post('/_debug/crear-caso-mod-tarifa', ctrl.debugCrearCasoModTarifa);
+router.delete('/_debug/:id', ctrl.debugEliminarSolicitud);
 
 // Webhook entrante de la mesa de ayuda externa (hoy: Freshdesk) —
 // protegido con x-admin-key. Ver services/ticketingProvider.js.

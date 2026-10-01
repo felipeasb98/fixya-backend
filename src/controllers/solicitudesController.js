@@ -623,6 +623,26 @@ exports.debugCrearCasoModTarifa = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+// Debug — borra una solicitud de prueba creada por el endpoint de
+// arriba (o cualquier otra, con cuidado). Protegido con ADMIN_KEY.
+exports.debugEliminarSolicitud = async (req, res, next) => {
+  try {
+    const adminKey = req.headers['x-admin-key'];
+    if (!adminKey || !process.env.ADMIN_KEY || adminKey !== process.env.ADMIN_KEY) {
+      throw new AppError('No autorizado', 403);
+    }
+
+    const solicitud = await prisma.solicitud.findUnique({ where: { id: req.params.id } });
+    if (!solicitud) throw new AppError('Solicitud no encontrada', 404);
+    if (!solicitud.trabajo.startsWith('[PRUEBA]')) {
+      throw new AppError('Solo se pueden borrar solicitudes marcadas [PRUEBA] por este endpoint', 409);
+    }
+
+    await prisma.solicitud.delete({ where: { id: req.params.id } });
+    res.json({ message: 'Solicitud de prueba eliminada', id: req.params.id });
+  } catch (err) { next(err); }
+};
+
 // ─────────────────────────────────────────────
 // Webhook entrante de la mesa de ayuda externa (hoy Freshdesk,
 // configurado como Automation → Trigger Webhook cuando el operador
